@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "days": {},
+  "all_time": {
+    "work_seconds": 0,
+    "rest_seconds": 0,
+    "completed_work_periods": 0,
+    "completed_short_breaks": 0,
+    "completed_long_breaks": 0,
+    "skipped_periods": 0,
+    "timer_resets": 0,
+    "completed_pomodoro_cycles": 0
+  }
+}

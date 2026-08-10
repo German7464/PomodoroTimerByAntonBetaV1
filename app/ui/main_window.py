@@ -1,0 +1,272 @@
+"""Главное окно приложения Pomodoro Timer на Tkinter."""
+
+from collections.abc import Callable
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+from app.autostart import AutostartService
+from app.config import APP_NAME, DATA_DIR_WARNING, SETTINGS_FILE, STATISTICS_FILE
+from app.models import AppSettings
+from app.notifications import NotificationService
+from app.statistics import StatisticsService
+from app.storage import load_app_settings, save_app_settings
+from app.timer_engine import TimerEngine
+from app.ui.help_window import HelpView
+from app.ui.settings_window import SettingsView
+from app.ui.stats_view import StatsView
+from app.ui.tray import TrayController
+from app.ui.widget_window import WidgetWindow
+
+
+class MainWindow:
+    """Главное окно с таймером, статистикой, настройками, справкой и треем."""
+
+    def __init__(self) -> None:
+        """Создает интерфейс и общую логику приложения."""
+        self.root = tk.Tk()
+        self.root.title(APP_NAME)
+        self.root.resizable(False, False)
+
+        self.settings = load_app_settings(SETTINGS_FILE)
+        self.autostart = AutostartService()
+
+        self.timer = TimerEngine(self.settings)
+        self.statistics = StatisticsService(STATISTICS_FILE)
+        self.notifications = NotificationService(self.root, self.settings)
+        self.widget_window = WidgetWindow(self.root, self.timer, self.settings)
+
+        self.tray = TrayController(
+            show_window=self._schedule(self.show_window),
+            hide_window=self._schedule(self.hide_to_tray),
+            toggle_timer=self._schedule(self.toggle_timer_from_tray),
+            reset_timer=self._schedule(self.reset),
+            toggle_widget=self._schedule(self.toggle_widget_from_tray),
+            exit_app=self._schedule(self.exit_app),
+        )
+        self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
+
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        timer_tab = ttk.Frame(notebook, padding=28)
+        notebook.add(timer_tab, text="Таймер")
+
+        self.stats_view = StatsView(notebook, self.statistics)
+        notebook.add(self.stats_view, text="Статистика")
+
+        self.settings_view = SettingsView(
+            notebook,
+            self.settings,
+            self.apply_settings,
+            self.autostart.status(),
+        )
+        notebook.add(self.settings_view, text="Настройки")
+
+        self.help_view = HelpView(notebook)
+        notebook.add(self.help_view, text="Справка")
+
+        self.mode_label = ttk.Label(
+            timer_tab,
+            text=self.timer.mode_name(),
+            font=("Segoe UI", 16, "bold"),
+        )
+        self.mode_label.pack(pady=(0, 8))
+
+        self.time_label = ttk.Label(
+            timer_tab,
+            text=self.timer.formatted_time(),
+            font=("Segoe UI", 48, "bold"),
+        )
+        self.time_label.pack(pady=(8, 10))
+
+        self.status_label = ttk.Label(timer_tab, text="Таймер остановлен")
+        self.status_label.pack(pady=(0, 18))
+
+        controls = ttk.Frame(timer_tab)
+        controls.pack()
+
+        self.start_button = ttk.Button(controls, text="Старт", command=self.start)
+        self.start_button.grid(row=0, column=0, padx=5)
+
+        self.pause_button = ttk.Button(
+            controls,
+            text="Пауза",
+            command=self.toggle_pause,
+            state=tk.DISABLED,
+        )
+        self.pause_button.grid(row=0, column=1, padx=5)
+
+        ttk.Button(controls, text="Пропустить период", command=self.skip_period).grid(
+            row=0,
+            column=2,
+            padx=5,
+        )
+        ttk.Button(controls, text="Сброс", command=self.reset).grid(row=0, column=3, padx=5)
+
+        if DATA_DIR_WARNING:
+            self.root.after(300, lambda: messagebox.showwarning("Portable-режим", DATA_DIR_WARNING))
+
+    def run(self) -> None:
+        """Запускает трей и цикл обработки событий Tkinter."""
+        self.tray.start()
+        self._schedule_tick()
+        if self.settings.minimize_to_tray_on_start:
+            self.root.after(200, self.hide_to_tray)
+        self.root.mainloop()
+
+    def start(self) -> None:
+        """Запускает отсчет времени."""
+        self.timer.start()
+        self.start_button.config(state=tk.DISABLED)
+        self.pause_button.config(state=tk.NORMAL, text="Пауза")
+        self._refresh_labels()
+
+    def toggle_pause(self) -> None:
+        """Ставит таймер на паузу или продолжает отсчет."""
+        self.timer.toggle_pause()
+        self._sync_timer_buttons()
+        self._refresh_labels()
+
+    def skip_period(self) -> None:
+        """Пропускает текущий период Pomodoro."""
+        skipped_mode = self.timer.skip_period()
+        self.statistics.record_skipped_period(skipped_mode)
+        self.stats_view.refresh()
+        self._refresh_labels()
+
+    def apply_settings(self, settings: AppSettings, autostart_changed: bool = False) -> None:
+        """Сохраняет настройки и применяет их к текущему таймеру."""
+        should_reset_timer = self._duration_settings_changed(settings)
+        if autostart_changed:
+            # Autostart changes HKCU Run, so it must happen only after an explicit user toggle.
+            try:
+                self.autostart.set_enabled(settings.autostart_enabled)
+            except RuntimeError as error:
+                messagebox.showwarning("Автозапуск", str(error))
+                settings.autostart_enabled = self.settings.autostart_enabled
+                self.settings_view.autostart_enabled_var.set(settings.autostart_enabled)
+
+        self.settings_view.update_autostart_status(self.autostart.status())
+        self.settings = settings
+        save_app_settings(SETTINGS_FILE, settings)
+        self.timer.update_settings(settings)
+        self.notifications.update_settings(settings)
+        self.widget_window.apply_settings(settings)
+        if should_reset_timer:
+            self.timer.reset()
+            self.start_button.config(state=tk.NORMAL)
+            self.pause_button.config(state=tk.DISABLED, text="Пауза")
+        self._refresh_labels()
+
+    def reset(self) -> None:
+        """Сбрасывает таймер и обновляет подписи в окне."""
+        self.statistics.record_reset()
+        self.stats_view.refresh()
+        self.timer.reset()
+        self.start_button.config(state=tk.NORMAL)
+        self.pause_button.config(state=tk.DISABLED, text="Пауза")
+        self._refresh_labels()
+
+    def show_window(self) -> None:
+        """Показывает главное окно из трея."""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def hide_to_tray(self) -> None:
+        """Скрывает главное окно, оставляя таймер, виджет и трей работать."""
+        self.root.withdraw()
+
+    def on_window_close(self) -> None:
+        """Обрабатывает закрытие окна согласно настройке пользователя."""
+        if self.settings.close_to_tray:
+            self.hide_to_tray()
+        else:
+            self.exit_app()
+
+    def exit_app(self) -> None:
+        """Полностью завершает приложение и убирает иконку трея."""
+        self.tray.stop()
+        self.root.destroy()
+
+    def toggle_timer_from_tray(self) -> None:
+        """Запускает или ставит таймер на паузу из меню трея."""
+        if self.timer.state.is_running:
+            self.timer.pause()
+        else:
+            self.timer.start()
+        self._sync_timer_buttons()
+        self._refresh_labels()
+
+    def toggle_widget_from_tray(self) -> None:
+        """Показывает или скрывает виджет из меню трея и сохраняет настройку."""
+        self.settings.widget_enabled = not self.settings.widget_enabled
+        save_app_settings(SETTINGS_FILE, self.settings)
+        self.widget_window.apply_settings(self.settings)
+        self._refresh_labels()
+
+    def continue_after_notification(self) -> None:
+        """Запускает следующий период из кнопки уведомления в ручном режиме."""
+        self.timer.start()
+        self.start_button.config(state=tk.DISABLED)
+        self.pause_button.config(state=tk.NORMAL, text="Пауза")
+        self._refresh_labels()
+
+    def _schedule_tick(self) -> None:
+        """Обновляет таймер один раз в секунду через планировщик Tkinter."""
+        completed_period = self.timer.tick()
+        if completed_period is not None:
+            self.statistics.record_completed_period(
+                completed_period.mode,
+                completed_period.duration_seconds,
+                self.settings.use_long_break,
+            )
+            next_mode = self.timer.state.mode
+            self.notifications.notify_period_finished(
+                completed_period.mode,
+                next_mode,
+                self.continue_after_notification,
+            )
+            self.stats_view.refresh()
+        self._refresh_labels()
+        self.root.after(1000, self._schedule_tick)
+
+    def _refresh_labels(self) -> None:
+        """Обновляет подписи в интерфейсе по текущему состоянию таймера."""
+        self.mode_label.config(text=self.timer.mode_name())
+        self.time_label.config(text=self.timer.formatted_time())
+        self.widget_window.update()
+
+        if self.timer.state.is_running:
+            self.status_label.config(text="Таймер запущен")
+            self.pause_button.config(text="Пауза")
+        elif str(self.pause_button["state"]) == tk.DISABLED:
+            self.status_label.config(text="Таймер остановлен")
+            self.pause_button.config(text="Пауза")
+        else:
+            self.status_label.config(text="Таймер на паузе")
+            self.pause_button.config(text="Продолжить")
+
+    def _sync_timer_buttons(self) -> None:
+        """Синхронизирует кнопки после команд из трея."""
+        if self.timer.state.is_running:
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.NORMAL, text="Пауза")
+        else:
+            self.start_button.config(state=tk.NORMAL)
+            self.pause_button.config(state=tk.NORMAL, text="Продолжить")
+
+    def _duration_settings_changed(self, new_settings: AppSettings) -> bool:
+        """Проверяет, изменились ли длительности периодов таймера."""
+        return (
+            self.settings.work_minutes != new_settings.work_minutes
+            or self.settings.short_break_minutes != new_settings.short_break_minutes
+            or self.settings.long_break_minutes != new_settings.long_break_minutes
+        )
+
+    def _schedule(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Безопасно выполняет команду трея в потоке Tkinter."""
+        def wrapped() -> None:
+            self.root.after(0, callback)
+
+        return wrapped

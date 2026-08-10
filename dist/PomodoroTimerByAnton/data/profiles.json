@@ -1,0 +1,28 @@
+[
+  {
+    "name": "Стандартный",
+    "work_minutes": 25,
+    "short_break_minutes": 5,
+    "long_break_minutes": 15,
+    "use_long_break": true,
+    "long_break_interval": 4,
+    "auto_start_next_period": true,
+    "time_display_format": "HH:MM:SS",
+    "notifications_enabled": true,
+    "notification_sound_enabled": true,
+    "work_end_message": "Рабочий период завершен. Время отдохнуть.",
+    "short_break_end_message": "Короткий отдых завершен. Пора вернуться к работе.",
+    "long_break_end_message": "Длинный отдых завершен. Пора начать новый рабочий период.",
+    "autostart_enabled": false,
+    "minimize_to_tray_on_start": false,
+    "close_to_tray": true,
+    "widget_enabled": false,
+    "widget_type": "Компактный",
+    "widget_background_color": "#202124",
+    "widget_text_color": "#ffffff",
+    "widget_opacity": 100,
+    "widget_always_on_top": true,
+    "widget_x": 100,
+    "widget_y": 100
+  }
+]

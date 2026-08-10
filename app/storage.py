@@ -1,0 +1,152 @@
+"""Функции для чтения и записи локальных JSON-файлов."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+from app.config import (
+    DEFAULT_AUTO_START_NEXT_PERIOD,
+    DEFAULT_CYCLES_BEFORE_LONG_BREAK,
+    DEFAULT_LONG_BREAK_MINUTES,
+    DEFAULT_MINIMIZE_TO_TRAY_ON_START,
+    DEFAULT_PROFILE_NAME,
+    DEFAULT_SHORT_BREAK_MINUTES,
+    DEFAULT_TIME_DISPLAY_FORMAT,
+    DEFAULT_USE_LONG_BREAK,
+    DEFAULT_WORK_MINUTES,
+)
+from app.models import AppSettings, TimeDisplayFormat
+
+
+def load_json(path: Path, default: Any) -> Any:
+    """Загружает JSON или возвращает значение по умолчанию, если файла нет."""
+    if not path.exists():
+        return default
+
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def save_json(path: Path, data: Any) -> None:
+    """Сохраняет данные в JSON с читаемым форматированием."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+def default_settings_data() -> dict[str, Any]:
+    """Возвращает настройки по умолчанию в формате для JSON."""
+    return {
+        "active_profile": DEFAULT_PROFILE_NAME,
+        "work_minutes": DEFAULT_WORK_MINUTES,
+        "short_break_minutes": DEFAULT_SHORT_BREAK_MINUTES,
+        "long_break_minutes": DEFAULT_LONG_BREAK_MINUTES,
+        "notifications_enabled": True,
+        "notification_sound_enabled": True,
+        "work_end_message": "Рабочий период завершен. Время отдохнуть.",
+        "short_break_end_message": "Короткий отдых завершен. Пора вернуться к работе.",
+        "long_break_end_message": "Длинный отдых завершен. Пора начать новый рабочий период.",
+        "autostart_enabled": False,
+        "use_long_break": DEFAULT_USE_LONG_BREAK,
+        "long_break_interval": DEFAULT_CYCLES_BEFORE_LONG_BREAK,
+        "auto_start_next_period": DEFAULT_AUTO_START_NEXT_PERIOD,
+        "time_display_format": DEFAULT_TIME_DISPLAY_FORMAT,
+        "minimize_to_tray_on_start": DEFAULT_MINIMIZE_TO_TRAY_ON_START,
+        "close_to_tray": True,
+        "widget_enabled": False,
+        "widget_type": "Компактный",
+        "widget_background_color": "#202124",
+        "widget_text_color": "#ffffff",
+        "widget_opacity": 100,
+        "widget_always_on_top": True,
+        "widget_x": 100,
+        "widget_y": 100,
+    }
+
+
+def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
+    """Дополняет старые настройки новыми полями и исправляет опасные значения."""
+    defaults = default_settings_data()
+    if not isinstance(raw_data, dict):
+        return defaults
+
+    settings = defaults | raw_data
+    settings["use_long_break"] = bool(settings["use_long_break"])
+    settings["notifications_enabled"] = bool(settings["notifications_enabled"])
+    settings["notification_sound_enabled"] = bool(settings["notification_sound_enabled"])
+    settings["auto_start_next_period"] = bool(settings["auto_start_next_period"])
+    settings["minimize_to_tray_on_start"] = bool(settings["minimize_to_tray_on_start"])
+    settings["close_to_tray"] = bool(settings["close_to_tray"])
+    settings["widget_enabled"] = bool(settings["widget_enabled"])
+    settings["widget_always_on_top"] = bool(settings["widget_always_on_top"])
+    settings["widget_type"] = str(settings["widget_type"] or "Компактный")
+    settings["widget_background_color"] = _safe_color(settings["widget_background_color"], "#202124")
+    settings["widget_text_color"] = _safe_color(settings["widget_text_color"], "#ffffff")
+
+    for key, default_value in (
+        ("work_end_message", "Рабочий период завершен. Время отдохнуть."),
+        ("short_break_end_message", "Короткий отдых завершен. Пора вернуться к работе."),
+        ("long_break_end_message", "Длинный отдых завершен. Пора начать новый рабочий период."),
+    ):
+        message = str(settings.get(key, "")).strip()
+        settings[key] = message or default_value
+
+    try:
+        settings["widget_opacity"] = min(100, max(20, int(settings["widget_opacity"])))
+    except (TypeError, ValueError):
+        settings["widget_opacity"] = 100
+
+    for key in ("widget_x", "widget_y"):
+        try:
+            settings[key] = max(0, int(settings[key]))
+        except (TypeError, ValueError):
+            settings[key] = 100
+
+    for key, default_value in (
+        ("work_minutes", DEFAULT_WORK_MINUTES),
+        ("short_break_minutes", DEFAULT_SHORT_BREAK_MINUTES),
+        ("long_break_minutes", DEFAULT_LONG_BREAK_MINUTES),
+    ):
+        try:
+            settings[key] = max(1, int(settings[key]))
+        except (TypeError, ValueError):
+            settings[key] = default_value
+
+    try:
+        settings["long_break_interval"] = max(1, int(settings["long_break_interval"]))
+    except (TypeError, ValueError):
+        settings["long_break_interval"] = DEFAULT_CYCLES_BEFORE_LONG_BREAK
+
+    allowed_formats = {format_item.value for format_item in TimeDisplayFormat}
+    if settings["time_display_format"] not in allowed_formats:
+        settings["time_display_format"] = DEFAULT_TIME_DISPLAY_FORMAT
+
+    return settings
+
+
+def load_app_settings(path: Path) -> AppSettings:
+    """Загружает настройки приложения и мягко мигрирует старый формат."""
+    settings_data = normalize_settings_data(load_json(path, default_settings_data()))
+    save_json(path, settings_data)
+    return AppSettings(**settings_data)
+
+
+def save_app_settings(path: Path, settings: AppSettings) -> None:
+    """Сохраняет настройки приложения в settings.json."""
+    save_json(path, settings.__dict__)
+
+
+def _safe_color(value: Any, default: str) -> str:
+    """Возвращает HEX-цвет или безопасное значение по умолчанию."""
+    color = str(value or "").strip()
+    if len(color) == 7 and color.startswith("#"):
+        try:
+            int(color[1:], 16)
+            return color
+        except ValueError:
+            return default
+    return default

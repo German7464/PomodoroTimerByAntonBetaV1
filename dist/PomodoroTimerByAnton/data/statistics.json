@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "days": {
+    "2026-05-27": {
+      "work_seconds": 120,
+      "rest_seconds": 60,
+      "completed_work_periods": 2,
+      "completed_short_breaks": 1,
+      "completed_long_breaks": 0,
+      "skipped_periods": 10,
+      "timer_resets": 8,
+      "completed_pomodoro_cycles": 1
+    }
+  },
+  "all_time": {
+    "work_seconds": 120,
+    "rest_seconds": 60,
+    "completed_work_periods": 2,
+    "completed_short_breaks": 1,
+    "completed_long_breaks": 0,
+    "skipped_periods": 10,
+    "timer_resets": 8,
+    "completed_pomodoro_cycles": 1
+  }
+}

@@ -1,0 +1,437 @@
+"""Настройки таймера, уведомлений, виджета, профилей, трея и автозапуска."""
+
+import tkinter as tk
+from tkinter import messagebox, ttk
+from typing import Callable
+
+from app.autostart import (
+    AUTOSTART_DISABLED,
+    AUTOSTART_ENABLED_CURRENT,
+    AUTOSTART_ENABLED_STALE,
+)
+from app.config import DEFAULT_PROFILE_NAME, PROFILES_FILE, is_frozen_app
+from app.models import AppSettings, TimeDisplayFormat
+from app.profiles import ProfilesService
+
+
+class SettingsView(ttk.Frame):
+    """Вкладка настроек с внутренними разделами."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        settings: AppSettings,
+        on_save: Callable[[AppSettings, bool], None],
+        autostart_status: str = AUTOSTART_DISABLED,
+    ) -> None:
+        """Создает вкладку настроек и загружает профили."""
+        super().__init__(parent, padding=12)
+        self.settings = settings
+        self.personal_settings = settings
+        self.on_save = on_save
+        self.autostart_status = autostart_status
+        self.profiles = ProfilesService(PROFILES_FILE)
+
+        self.profile_name_var = tk.StringVar(value=settings.active_profile)
+        self.work_minutes_var = tk.IntVar(value=settings.work_minutes)
+        self.short_break_minutes_var = tk.IntVar(value=settings.short_break_minutes)
+        self.long_break_minutes_var = tk.IntVar(value=settings.long_break_minutes)
+        self.use_long_break_var = tk.BooleanVar(value=settings.use_long_break)
+        self.long_break_interval_var = tk.IntVar(value=settings.long_break_interval)
+        self.time_display_format_var = tk.StringVar(value=settings.time_display_format)
+        self.minimize_to_tray_on_start_var = tk.BooleanVar(value=settings.minimize_to_tray_on_start)
+        self.close_to_tray_var = tk.BooleanVar(value=settings.close_to_tray)
+        self.autostart_enabled_var = tk.BooleanVar(value=settings.autostart_enabled)
+        self.notifications_enabled_var = tk.BooleanVar(value=settings.notifications_enabled)
+        self.notification_sound_enabled_var = tk.BooleanVar(value=settings.notification_sound_enabled)
+        self.auto_start_next_period_var = tk.BooleanVar(value=settings.auto_start_next_period)
+        self.work_end_message_var = tk.StringVar(value=settings.work_end_message)
+        self.short_break_end_message_var = tk.StringVar(value=settings.short_break_end_message)
+        self.long_break_end_message_var = tk.StringVar(value=settings.long_break_end_message)
+        self.widget_enabled_var = tk.BooleanVar(value=settings.widget_enabled)
+        self.widget_type_var = tk.StringVar(value=settings.widget_type)
+        self.widget_background_color_var = tk.StringVar(value=settings.widget_background_color)
+        self.widget_text_color_var = tk.StringVar(value=settings.widget_text_color)
+        self.widget_opacity_var = tk.IntVar(value=settings.widget_opacity)
+        self.widget_always_on_top_var = tk.BooleanVar(value=settings.widget_always_on_top)
+        self.autostart_status_label: ttk.Label | None = None
+        self.autostart_checkbutton: ttk.Checkbutton | None = None
+        self.autostart_update_button: ttk.Button | None = None
+
+        self._build_ui()
+        self._reload_profiles_list()
+        self._update_long_break_controls()
+
+    def _build_ui(self) -> None:
+        """Создает внутренние вкладки настроек и нижнюю панель сохранения."""
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        time_tab = ttk.Frame(notebook, padding=16)
+        logic_tab = ttk.Frame(notebook, padding=16)
+        notifications_tab = ttk.Frame(notebook, padding=16)
+        widget_tab = ttk.Frame(notebook, padding=16)
+        profiles_tab = ttk.Frame(notebook, padding=16)
+        tray_tab = ttk.Frame(notebook, padding=16)
+
+        notebook.add(time_tab, text="Время")
+        notebook.add(logic_tab, text="Логика таймера")
+        notebook.add(notifications_tab, text="Уведомления")
+        notebook.add(widget_tab, text="Виджет")
+        notebook.add(profiles_tab, text="Профили")
+        notebook.add(tray_tab, text="Трей и автозапуск")
+
+        self._build_time_settings(time_tab)
+        self._build_logic_settings(logic_tab)
+        self._build_notification_settings(notifications_tab)
+        self._build_widget_settings(widget_tab)
+        self._build_profiles_settings(profiles_tab)
+        self._build_tray_settings(tray_tab)
+
+        footer = ttk.Frame(self)
+        footer.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(footer, text="Сохранить настройки", command=self._save).pack(side=tk.RIGHT)
+
+    def _build_time_settings(self, parent: ttk.Frame) -> None:
+        """Группа настроек длительности и формата времени."""
+        self._add_spinbox(parent, "Работа, минут:", self.work_minutes_var, 0)
+        self._add_spinbox(parent, "Короткий отдых, минут:", self.short_break_minutes_var, 1)
+        self._add_spinbox(parent, "Длинный отдых, минут:", self.long_break_minutes_var, 2)
+        ttk.Label(parent, text="Формат времени:").grid(row=3, column=0, sticky=tk.W, pady=6)
+        ttk.Combobox(
+            parent,
+            values=[format_item.value for format_item in TimeDisplayFormat],
+            textvariable=self.time_display_format_var,
+            state="readonly",
+            width=12,
+        ).grid(row=3, column=1, sticky=tk.W, pady=6)
+        ttk.Label(
+            parent,
+            text="Формат применяется в главном окне и в виджете.",
+        ).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+    def _build_logic_settings(self, parent: ttk.Frame) -> None:
+        """Группа настроек порядка периодов."""
+        ttk.Checkbutton(
+            parent,
+            text="Использовать длинный отдых",
+            variable=self.use_long_break_var,
+            command=self._update_long_break_controls,
+        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
+        self.interval_label = ttk.Label(parent, text="Рабочих периодов до длинного отдыха:")
+        self.interval_label.grid(row=1, column=0, sticky=tk.W, pady=6)
+        self.interval_spinbox = ttk.Spinbox(
+            parent,
+            from_=1,
+            to=20,
+            width=6,
+            textvariable=self.long_break_interval_var,
+        )
+        self.interval_spinbox.grid(row=1, column=1, sticky=tk.W, pady=6)
+
+    def _build_notification_settings(self, parent: ttk.Frame) -> None:
+        """Группа уведомлений и поведения после завершения периода."""
+        ttk.Checkbutton(parent, text="Уведомления включены", variable=self.notifications_enabled_var).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Звук включен", variable=self.notification_sound_enabled_var).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Автоматически переходить к следующему периоду", variable=self.auto_start_next_period_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Label(
+            parent,
+            text="Если автопереход включен, уведомление покажет кнопку «Закрыть».\nЕсли автопереход выключен, уведомление покажет кнопку «Продолжить».",
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(4, 12))
+        self._add_entry(parent, "Конец работы:", self.work_end_message_var, 4, width=48)
+        self._add_entry(parent, "Конец короткого отдыха:", self.short_break_end_message_var, 5, width=48)
+        self._add_entry(parent, "Конец длинного отдыха:", self.long_break_end_message_var, 6, width=48)
+
+    def _build_widget_settings(self, parent: ttk.Frame) -> None:
+        """Группа настроек плавающего виджета."""
+        ttk.Checkbutton(parent, text="Виджет включен", variable=self.widget_enabled_var).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Label(parent, text="Тип виджета:").grid(row=1, column=0, sticky=tk.W, pady=6)
+        ttk.Combobox(parent, values=["Компактный"], textvariable=self.widget_type_var, state="readonly", width=14).grid(row=1, column=1, sticky=tk.W, pady=6)
+        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 2, width=12)
+        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 3, width=12)
+        ttk.Label(parent, text="Прозрачность, %:").grid(row=4, column=0, sticky=tk.W, pady=6)
+        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=4, column=1, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Button(parent, text="Сбросить позицию виджета", command=self._reset_widget_position).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+    def _build_profiles_settings(self, parent: ttk.Frame) -> None:
+        """Группа управления профилями."""
+        ttk.Label(parent, text="Имя профиля:").grid(row=0, column=0, sticky=tk.W, pady=6)
+        ttk.Entry(parent, textvariable=self.profile_name_var, width=32).grid(row=1, column=0, sticky=tk.EW, pady=(0, 8))
+        self.profiles_listbox = tk.Listbox(parent, height=9, width=36, exportselection=False)
+        self.profiles_listbox.grid(row=2, column=0, rowspan=5, sticky=tk.NSEW, padx=(0, 12))
+        self.profiles_listbox.bind("<<ListboxSelect>>", self._on_profile_selected)
+        ttk.Button(parent, text="Сохранить профиль", command=self._save_profile).grid(row=2, column=1, sticky=tk.EW, pady=3)
+        ttk.Button(parent, text="Применить профиль", command=self._apply_selected_profile).grid(row=3, column=1, sticky=tk.EW, pady=3)
+        ttk.Button(parent, text="Удалить профиль", command=self._delete_selected_profile).grid(row=4, column=1, sticky=tk.EW, pady=3)
+        ttk.Button(parent, text="Вернуть настройки по умолчанию", command=self._restore_default_settings).grid(row=5, column=1, sticky=tk.EW, pady=3)
+        ttk.Button(parent, text="Вернуть мои настройки", command=self._restore_personal_settings).grid(row=6, column=1, sticky=tk.EW, pady=3)
+
+    def _build_tray_settings(self, parent: ttk.Frame) -> None:
+        """Группа настроек трея и автозапуска."""
+        ttk.Checkbutton(parent, text="Сворачивать программу после запуска", variable=self.minimize_to_tray_on_start_var).grid(row=0, column=0, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="При закрытии сворачивать в трей", variable=self.close_to_tray_var).grid(row=1, column=0, sticky=tk.W, pady=6)
+        self.autostart_checkbutton = ttk.Checkbutton(
+            parent,
+            text="Включить автозапуск вместе с Windows",
+            variable=self.autostart_enabled_var,
+        )
+        self.autostart_checkbutton.grid(row=2, column=0, sticky=tk.W, pady=6)
+        self.autostart_status_label = ttk.Label(parent, text=self._autostart_status_text())
+        self.autostart_status_label.grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
+        self.autostart_update_button = ttk.Button(
+            parent,
+            text="Обновить автозапуск",
+            command=self._update_autostart,
+        )
+        self.autostart_update_button.grid(row=4, column=0, sticky=tk.W, pady=(8, 0))
+        ttk.Label(
+            parent,
+            text="Автозапуск создается только для текущего пользователя. В exe-версии он указывает на текущий файл программы.",
+        ).grid(row=5, column=0, sticky=tk.W, pady=(8, 0))
+        self._sync_autostart_controls()
+
+    def update_autostart_status(self, status: str) -> None:
+        """Обновляет подпись автозапуска после сохранения настроек."""
+        self.autostart_status = status
+        if self.autostart_status_label is not None:
+            self.autostart_status_label.config(text=self._autostart_status_text())
+        self._sync_autostart_controls()
+
+    def _autostart_status_text(self) -> str:
+        """Возвращает понятное описание текущего состояния автозапуска."""
+        if self.autostart_status == AUTOSTART_ENABLED_CURRENT:
+            return "Автозапуск включен и указывает на текущую папку программы."
+        if self.autostart_status == AUTOSTART_ENABLED_STALE:
+            return "Автозапуск включен, но путь устарел. Сохраните настройку, чтобы обновить ярлык."
+        if not is_frozen_app() and self.autostart_status == AUTOSTART_DISABLED:
+            return "Сейчас программа запущена из Python. Автозапуск по умолчанию доступен для exe-версии."
+        return "Автозапуск выключен."
+
+    def _sync_autostart_controls(self) -> None:
+        """Отключает галочку автозапуска при запуске из исходников."""
+        if self.autostart_checkbutton is None:
+            return
+        state = tk.NORMAL if is_frozen_app() else tk.DISABLED
+        self.autostart_checkbutton.config(state=state)
+        if self.autostart_update_button is not None:
+            button_state = tk.NORMAL if is_frozen_app() and self.autostart_status == AUTOSTART_ENABLED_STALE else tk.DISABLED
+            self.autostart_update_button.config(state=button_state)
+
+    def _update_autostart(self) -> None:
+        """Forces rewriting autostart when the stored exe path is stale."""
+        settings = self._settings_from_form(active_profile=self.profile_name_var.get().strip())
+        settings.autostart_enabled = True
+        self.autostart_enabled_var.set(True)
+        self.on_save(settings, True)
+        self.settings = settings
+
+    def _add_spinbox(self, parent: ttk.Frame, text: str, variable: tk.IntVar, row: int) -> None:
+        """Добавляет строку с числовым полем."""
+        ttk.Label(parent, text=text).grid(row=row, column=0, sticky=tk.W, pady=6)
+        ttk.Spinbox(parent, from_=1, to=240, width=6, textvariable=variable).grid(row=row, column=1, sticky=tk.W, pady=6)
+
+    def _add_entry(self, parent: ttk.Frame, text: str, variable: tk.StringVar, row: int, width: int = 34) -> None:
+        """Добавляет строку с текстовым полем."""
+        ttk.Label(parent, text=text).grid(row=row, column=0, sticky=tk.W, pady=6)
+        ttk.Entry(parent, textvariable=variable, width=width).grid(row=row, column=1, sticky=tk.W, pady=6)
+
+    def _update_long_break_controls(self) -> None:
+        """Включает или отключает поле интервала длинного отдыха."""
+        state = tk.NORMAL if self.use_long_break_var.get() else tk.DISABLED
+        self.interval_spinbox.config(state=state)
+        self.interval_label.config(state=state)
+
+    def _reload_profiles_list(self) -> None:
+        """Перечитывает список профилей."""
+        self.profiles_listbox.delete(0, tk.END)
+        for name in self.profiles.names():
+            self.profiles_listbox.insert(tk.END, name)
+
+    def _on_profile_selected(self, _event: tk.Event) -> None:
+        """Подставляет имя выбранного профиля в поле ввода."""
+        selected_name = self._selected_profile_name()
+        if selected_name:
+            self.profile_name_var.set(selected_name)
+
+    def _save_profile(self) -> None:
+        """Сохраняет текущие значения формы как профиль."""
+        profile_name = self.profile_name_var.get().strip()
+        if not profile_name:
+            messagebox.showwarning("Профиль", "Введите имя профиля.")
+            return
+        settings = self._settings_from_form(active_profile=profile_name)
+        self.profiles.save_profile(profile_name, settings)
+        self._reload_profiles_list()
+        self._select_profile(profile_name)
+        self.on_save(settings, False)
+        self.settings = settings
+        messagebox.showinfo("Профиль", "Профиль сохранен.")
+
+    def _apply_selected_profile(self) -> None:
+        """Применяет выбранный профиль."""
+        profile_name = self._selected_profile_name() or self.profile_name_var.get().strip()
+        profile = self.profiles.get_profile(profile_name)
+        if profile is None:
+            messagebox.showwarning("Профиль", "Выберите профиль из списка.")
+            return
+        settings = self.profiles.settings_from_profile(profile)
+        self._load_settings_to_form(settings)
+        self.on_save(settings, False)
+        self.settings = settings
+
+    def _delete_selected_profile(self) -> None:
+        """Удаляет выбранный профиль после подтверждения."""
+        profile_name = self._selected_profile_name()
+        if not profile_name:
+            messagebox.showwarning("Профиль", "Выберите профиль для удаления.")
+            return
+        if profile_name == DEFAULT_PROFILE_NAME:
+            messagebox.showwarning("Профиль", "Стандартный профиль удалить нельзя.")
+            return
+        if messagebox.askyesno("Удалить профиль", f"Удалить профиль «{profile_name}»?"):
+            self.profiles.delete_profile(profile_name)
+            self._reload_profiles_list()
+            self.profile_name_var.set("")
+
+    def _restore_default_settings(self) -> None:
+        """Возвращает стандартный набор настроек."""
+        settings = self.profiles.default_settings()
+        self._load_settings_to_form(settings)
+        self.on_save(settings, False)
+        self.settings = settings
+        self._select_profile(DEFAULT_PROFILE_NAME)
+
+    def _restore_personal_settings(self) -> None:
+        """Возвращает настройки, с которыми пользователь открыл вкладку."""
+        self._load_settings_to_form(self.personal_settings)
+        self.on_save(self.personal_settings, False)
+        self.settings = self.personal_settings
+        self._select_profile(self.personal_settings.active_profile)
+
+    def _save(self) -> None:
+        """Сохраняет текущие значения формы как активные настройки."""
+        settings = self._settings_from_form(active_profile=self.profile_name_var.get().strip())
+        autostart_changed = settings.autostart_enabled != self.settings.autostart_enabled
+        self.on_save(settings, autostart_changed)
+        self.settings = settings
+
+    def _settings_from_form(self, active_profile: str) -> AppSettings:
+        """Собирает объект настроек из значений формы."""
+        return AppSettings(
+            active_profile=active_profile or self.settings.active_profile,
+            work_minutes=self._positive_int(self.work_minutes_var, self.settings.work_minutes),
+            short_break_minutes=self._positive_int(self.short_break_minutes_var, self.settings.short_break_minutes),
+            long_break_minutes=self._positive_int(self.long_break_minutes_var, self.settings.long_break_minutes),
+            notifications_enabled=self.notifications_enabled_var.get(),
+            notification_sound_enabled=self.notification_sound_enabled_var.get(),
+            work_end_message=self.work_end_message_var.get().strip(),
+            short_break_end_message=self.short_break_end_message_var.get().strip(),
+            long_break_end_message=self.long_break_end_message_var.get().strip(),
+            autostart_enabled=self.autostart_enabled_var.get(),
+            use_long_break=self.use_long_break_var.get(),
+            long_break_interval=self._positive_int(self.long_break_interval_var, self.settings.long_break_interval),
+            auto_start_next_period=self.auto_start_next_period_var.get(),
+            time_display_format=self.time_display_format_var.get(),
+            minimize_to_tray_on_start=self.minimize_to_tray_on_start_var.get(),
+            close_to_tray=self.close_to_tray_var.get(),
+            widget_enabled=self.widget_enabled_var.get(),
+            widget_type=self.widget_type_var.get(),
+            widget_background_color=self._safe_color(self.widget_background_color_var.get(), self.settings.widget_background_color),
+            widget_text_color=self._safe_color(self.widget_text_color_var.get(), self.settings.widget_text_color),
+            widget_opacity=self._bounded_opacity(),
+            widget_always_on_top=self.widget_always_on_top_var.get(),
+            widget_x=self.settings.widget_x,
+            widget_y=self.settings.widget_y,
+        )
+
+    def _load_settings_to_form(self, settings: AppSettings) -> None:
+        """Заполняет поля формы значениями настроек."""
+        self.profile_name_var.set(settings.active_profile)
+        self.work_minutes_var.set(settings.work_minutes)
+        self.short_break_minutes_var.set(settings.short_break_minutes)
+        self.long_break_minutes_var.set(settings.long_break_minutes)
+        self.use_long_break_var.set(settings.use_long_break)
+        self.long_break_interval_var.set(settings.long_break_interval)
+        self.auto_start_next_period_var.set(settings.auto_start_next_period)
+        self.time_display_format_var.set(settings.time_display_format)
+        self.minimize_to_tray_on_start_var.set(settings.minimize_to_tray_on_start)
+        self.close_to_tray_var.set(settings.close_to_tray)
+        self.autostart_enabled_var.set(settings.autostart_enabled)
+        self.notifications_enabled_var.set(settings.notifications_enabled)
+        self.notification_sound_enabled_var.set(settings.notification_sound_enabled)
+        self.work_end_message_var.set(settings.work_end_message)
+        self.short_break_end_message_var.set(settings.short_break_end_message)
+        self.long_break_end_message_var.set(settings.long_break_end_message)
+        self.widget_enabled_var.set(settings.widget_enabled)
+        self.widget_type_var.set(settings.widget_type)
+        self.widget_background_color_var.set(settings.widget_background_color)
+        self.widget_text_color_var.set(settings.widget_text_color)
+        self.widget_opacity_var.set(settings.widget_opacity)
+        self.widget_always_on_top_var.set(settings.widget_always_on_top)
+        self._update_long_break_controls()
+
+    def _reset_widget_position(self) -> None:
+        """Возвращает виджет в левую верхнюю область экрана."""
+        self.settings.widget_x = 100
+        self.settings.widget_y = 100
+        messagebox.showinfo("Виджет", "Позиция виджета будет сброшена после сохранения.")
+
+    def _selected_profile_name(self) -> str | None:
+        """Возвращает имя профиля, выбранного в списке."""
+        selection = self.profiles_listbox.curselection()
+        if not selection:
+            return None
+        return self.profiles_listbox.get(selection[0])
+
+    def _select_profile(self, profile_name: str) -> None:
+        """Выделяет профиль в списке по имени."""
+        for index, name in enumerate(self.profiles.names()):
+            if name == profile_name:
+                self.profiles_listbox.selection_clear(0, tk.END)
+                self.profiles_listbox.selection_set(index)
+                self.profiles_listbox.see(index)
+                return
+
+    def _positive_int(self, variable: tk.IntVar, default: int) -> int:
+        """Безопасно читает положительное число из поля."""
+        try:
+            return max(1, int(variable.get()))
+        except (tk.TclError, ValueError):
+            return default
+
+    def _bounded_opacity(self) -> int:
+        """Возвращает прозрачность в диапазоне от 20 до 100."""
+        try:
+            return min(100, max(20, int(self.widget_opacity_var.get())))
+        except (tk.TclError, ValueError):
+            return 100
+
+    def _safe_color(self, value: str, default: str) -> str:
+        """Проверяет цвет в формате #RRGGBB."""
+        color = value.strip()
+        if len(color) == 7 and color.startswith("#"):
+            try:
+                int(color[1:], 16)
+                return color
+            except ValueError:
+                return default
+        return default
+
+
+class SettingsWindow:
+    """Отдельное окно настроек для совместимости со старым кодом."""
+
+    def __init__(
+        self,
+        parent: tk.Tk,
+        settings: AppSettings,
+        on_save: Callable[[AppSettings, bool], None],
+    ) -> None:
+        """Создает окно и помещает в него SettingsView."""
+        self.window = tk.Toplevel(parent)
+        self.window.title("Настройки")
+        self.window.geometry("920x560")
+        self.window.minsize(820, 480)
+        SettingsView(self.window, settings, on_save).pack(fill=tk.BOTH, expand=True)
