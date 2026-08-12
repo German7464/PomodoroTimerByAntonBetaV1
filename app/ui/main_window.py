@@ -10,6 +10,14 @@ from app.models import AppSettings
 from app.notifications import NotificationService
 from app.statistics import StatisticsService
 from app.storage import load_app_settings, save_app_settings
+from app.theme import (
+    APPEARANCE_DARK,
+    APPEARANCE_LIGHT,
+    ThemeManager,
+    Tooltip,
+    normalize_appearance_mode,
+    normalize_theme_name,
+)
 from app.timer_engine import TimerEngine
 from app.ui.help_window import HelpView
 from app.ui.settings_window import SettingsView
@@ -28,11 +36,20 @@ class MainWindow:
         self.root.resizable(False, False)
 
         self.settings = load_app_settings(SETTINGS_FILE)
+        self.theme_manager = ThemeManager(self.root)
+        self.theme_manager.apply(
+            self.settings.theme_name,
+            self.settings.appearance_mode,
+        )
         self.autostart = AutostartService()
 
         self.timer = TimerEngine(self.settings)
         self.statistics = StatisticsService(STATISTICS_FILE)
-        self.notifications = NotificationService(self.root, self.settings)
+        self.notifications = NotificationService(
+            self.root,
+            self.settings,
+            self.theme_manager,
+        )
         self.widget_window = WidgetWindow(
             self.root,
             self.timer,
@@ -47,6 +64,7 @@ class MainWindow:
             save_settings=lambda settings: save_app_settings(SETTINGS_FILE, settings),
             on_visibility_requested=self.set_widget_visibility,
             on_layout_changed=self._on_widget_layout_changed,
+            theme_manager=self.theme_manager,
         )
 
         self.tray = TrayController(
@@ -59,9 +77,9 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
 
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
-        timer_tab = ttk.Frame(notebook, padding=28)
+        timer_tab = ttk.Frame(notebook, padding=24)
         notebook.add(timer_tab, text="Таймер")
 
         self.stats_view = StatsView(notebook, self.statistics)
@@ -72,33 +90,64 @@ class MainWindow:
             self.settings,
             self.apply_settings,
             self.autostart.status(),
+            on_theme_change=self.apply_theme_selection,
         )
         notebook.add(self.settings_view, text="Настройки")
 
         self.help_view = HelpView(notebook)
         notebook.add(self.help_view, text="Справка")
 
+        toolbar = ttk.Frame(timer_tab, style="Toolbar.TFrame")
+        toolbar.pack(fill=tk.X, pady=(0, 16))
+        ttk.Label(toolbar, text="Фокус-сессия", style="Heading.TLabel").pack(side=tk.LEFT)
+        self.theme_toggle_button = ttk.Button(
+            toolbar,
+            command=self.toggle_appearance_mode,
+            style="Ghost.TButton",
+        )
+        self.theme_toggle_button.pack(side=tk.RIGHT)
+        self.theme_toggle_tooltip = Tooltip(
+            self.theme_toggle_button,
+            "Переключить светлый или тёмный режим",
+            self.theme_manager,
+        )
+
+        timer_card = ttk.Frame(timer_tab, style="Card.TFrame", padding=(34, 28))
+        timer_card.pack(fill=tk.BOTH, expand=True)
+
         self.mode_label = ttk.Label(
-            timer_tab,
+            timer_card,
             text=self.timer.mode_name(),
-            font=("Segoe UI", 16, "bold"),
+            style=self.theme_manager.mode_style(
+                self.timer.state.mode,
+                self.timer.state.waiting_for_continue,
+            ),
         )
         self.mode_label.pack(pady=(0, 8))
 
         self.time_label = ttk.Label(
-            timer_tab,
+            timer_card,
             text=self.timer.formatted_time(),
-            font=("Segoe UI", 48, "bold"),
+            style="Card.Timer.TLabel",
         )
-        self.time_label.pack(pady=(8, 10))
+        self.time_label.pack(pady=(6, 10))
 
-        self.status_label = ttk.Label(timer_tab, text="Таймер остановлен")
-        self.status_label.pack(pady=(0, 18))
+        self.status_label = ttk.Label(
+            timer_card,
+            text="Таймер остановлен",
+            style="Card.Secondary.TLabel",
+        )
+        self.status_label.pack(pady=(0, 22))
 
-        controls = ttk.Frame(timer_tab)
+        controls = ttk.Frame(timer_card, style="Card.TFrame")
         controls.pack()
 
-        self.start_button = ttk.Button(controls, text="Старт", command=self.start)
+        self.start_button = ttk.Button(
+            controls,
+            text="Старт",
+            command=self.start,
+            style="Accent.TButton",
+        )
         self.start_button.grid(row=0, column=0, padx=5)
 
         self.pause_button = ttk.Button(
@@ -127,6 +176,7 @@ class MainWindow:
             text="Продолжить и начать следующий период",
             command=self.continue_manual_transition,
             state=tk.DISABLED,
+            style="Accent.TButton",
         )
         self.continue_button.grid(row=1, column=0, columnspan=4, pady=(12, 0))
 
@@ -134,6 +184,7 @@ class MainWindow:
             controls,
             text="Показать виджет",
             command=self.toggle_widget_visibility,
+            style="Ghost.TButton",
         )
         self.widget_toggle_button.grid(
             row=2,
@@ -142,7 +193,13 @@ class MainWindow:
             pady=(12, 0),
         )
 
+        self._sync_theme_button()
         self.set_widget_visibility(self.settings.widget_enabled, persist=False)
+        self.apply_theme_selection(
+            self.settings.theme_name,
+            self.settings.appearance_mode,
+            persist=False,
+        )
 
         if DATA_DIR_WARNING:
             self.root.after(300, lambda: messagebox.showwarning("Portable-режим", DATA_DIR_WARNING))
@@ -196,6 +253,11 @@ class MainWindow:
 
         self.settings_view.update_autostart_status(self.autostart.status())
         self.settings = settings
+        self.apply_theme_selection(
+            settings.theme_name,
+            settings.appearance_mode,
+            persist=False,
+        )
         self.timer.update_settings(settings)
         self.notifications.update_settings(settings)
         self.set_widget_visibility(settings.widget_enabled, persist=False)
@@ -262,6 +324,59 @@ class MainWindow:
     def toggle_widget_visibility(self) -> None:
         """Переключает виджет единственной пользовательской кнопкой."""
         self.set_widget_visibility(not self.widget_window.is_visible())
+
+    def toggle_appearance_mode(self) -> None:
+        """Быстро переключает светлый/тёмный режим общей активной темы."""
+        next_mode = (
+            APPEARANCE_LIGHT
+            if self.settings.appearance_mode == APPEARANCE_DARK
+            else APPEARANCE_DARK
+        )
+        self.apply_theme_selection(self.settings.theme_name, next_mode)
+
+    def apply_theme_selection(
+        self,
+        theme_name: str,
+        appearance_mode: str,
+        *,
+        persist: bool = True,
+    ) -> bool:
+        """Применяет тему ко всем открытым окнам и сохраняет только реальный выбор."""
+        normalized_theme = normalize_theme_name(theme_name)
+        normalized_mode = normalize_appearance_mode(appearance_mode)
+        changed = (
+            self.settings.theme_name != normalized_theme
+            or self.settings.appearance_mode != normalized_mode
+        )
+        self.settings.theme_name = normalized_theme
+        self.settings.appearance_mode = normalized_mode
+        self.theme_manager.apply(normalized_theme, normalized_mode)
+        if hasattr(self, "settings_view"):
+            self.settings_view.sync_theme(normalized_theme, normalized_mode)
+        self._sync_theme_button()
+        if hasattr(self, "mode_label"):
+            self.mode_label.config(
+                style=self.theme_manager.mode_style(
+                    self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
+            )
+        if changed and persist:
+            save_app_settings(SETTINGS_FILE, self.settings)
+        return changed
+
+    def _sync_theme_button(self) -> None:
+        """Обновляет понятный текст и подсказку быстрого переключателя."""
+        if not hasattr(self, "theme_toggle_button"):
+            return
+        dark_is_active = self.settings.appearance_mode == APPEARANCE_DARK
+        target_label = "Светлый режим" if dark_is_active else "Тёмный режим"
+        self.theme_toggle_button.config(text=target_label)
+        if hasattr(self, "theme_toggle_tooltip"):
+            self.theme_toggle_tooltip.text = (
+                f"Переключить на {target_label.lower()}. "
+                f"Текущая тема: {self.settings.theme_name}."
+            )
 
     def set_widget_visibility(self, visible: bool, *, persist: bool = True) -> bool:
         """Применяет, сохраняет и отражает единое состояние видимости виджета."""
@@ -348,7 +463,13 @@ class MainWindow:
 
     def _refresh_labels(self) -> None:
         """Обновляет подписи в интерфейсе по текущему состоянию таймера."""
-        self.mode_label.config(text=self.timer.mode_name())
+        self.mode_label.config(
+            text=self.timer.mode_name(),
+            style=self.theme_manager.mode_style(
+                self.timer.state.mode,
+                self.timer.state.waiting_for_continue,
+            ),
+        )
         self.time_label.config(text=self.timer.formatted_time())
         self.widget_window.update()
 

@@ -29,6 +29,7 @@ DEFAULT_WIDGET_TYPE = WIDGET_TYPE_COMPACT
 DEFAULT_WIDGET_SIZE = WIDGET_SIZE_SMALL
 DEFAULT_WIDGET_X = 100
 DEFAULT_WIDGET_Y = 100
+MIN_WIDGET_OPACITY = 70
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,21 @@ def clamp_window_position(
     return (
         min(maximum_x, max(minimum_x, x)),
         min(maximum_y, max(minimum_y, y)),
+    )
+
+
+def content_fitted_dimensions(
+    width: int,
+    height: int,
+    required_width: int,
+    required_height: int,
+    minimum_width: int,
+    minimum_height: int,
+) -> tuple[int, int]:
+    """Расширяет клиентскую область, если DPI или длинный текст требуют больше места."""
+    return (
+        max(1, int(width), int(required_width), int(minimum_width)),
+        max(1, int(height), int(required_height), int(minimum_height)),
     )
 
 

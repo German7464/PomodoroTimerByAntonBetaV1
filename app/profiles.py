@@ -17,9 +17,16 @@ from app.config import (
 )
 from app.models import AppSettings, TimerProfile, TimeDisplayFormat
 from app.storage import load_json, save_json
+from app.theme import (
+    DEFAULT_APPEARANCE_MODE,
+    DEFAULT_THEME_NAME,
+    normalize_appearance_mode,
+    normalize_theme_name,
+)
 from app.widget_settings import (
     DEFAULT_WIDGET_SIZE,
     DEFAULT_WIDGET_TYPE,
+    MIN_WIDGET_OPACITY,
     default_widget_layouts,
     normalize_widget_layouts,
     normalize_widget_size,
@@ -47,6 +54,8 @@ def default_profile() -> TimerProfile:
         autostart_enabled=False,
         minimize_to_tray_on_start=DEFAULT_MINIMIZE_TO_TRAY_ON_START,
         close_to_tray=True,
+        theme_name=DEFAULT_THEME_NAME,
+        appearance_mode=DEFAULT_APPEARANCE_MODE,
         widget_enabled=False,
         widget_type=DEFAULT_WIDGET_TYPE,
         widget_size=DEFAULT_WIDGET_SIZE,
@@ -99,6 +108,8 @@ class ProfilesService:
             autostart_enabled=settings.autostart_enabled,
             minimize_to_tray_on_start=settings.minimize_to_tray_on_start,
             close_to_tray=settings.close_to_tray,
+            theme_name=settings.theme_name,
+            appearance_mode=settings.appearance_mode,
             widget_enabled=settings.widget_enabled,
             widget_type=settings.widget_type,
             widget_size=settings.widget_size,
@@ -147,6 +158,8 @@ class ProfilesService:
             time_display_format=profile.time_display_format,
             minimize_to_tray_on_start=profile.minimize_to_tray_on_start,
             close_to_tray=profile.close_to_tray,
+            theme_name=profile.theme_name,
+            appearance_mode=profile.appearance_mode,
             widget_enabled=profile.widget_enabled,
             widget_type=profile.widget_type,
             widget_size=profile.widget_size,
@@ -206,6 +219,10 @@ class ProfilesService:
         normalized["autostart_enabled"] = bool(normalized["autostart_enabled"])
         normalized["minimize_to_tray_on_start"] = bool(normalized["minimize_to_tray_on_start"])
         normalized["close_to_tray"] = bool(normalized["close_to_tray"])
+        normalized["theme_name"] = normalize_theme_name(normalized.get("theme_name"))
+        normalized["appearance_mode"] = normalize_appearance_mode(
+            normalized.get("appearance_mode"),
+        )
         normalized["widget_enabled"] = bool(normalized["widget_enabled"])
         normalized["widget_always_on_top"] = bool(normalized["widget_always_on_top"])
         normalized["widget_type"] = normalize_widget_type(normalized.get("widget_type"))
@@ -234,7 +251,10 @@ class ProfilesService:
         )
         normalized["widget_opacity"] = min(
             100,
-            max(20, self._positive_int(normalized["widget_opacity"], 100)),
+            max(
+                MIN_WIDGET_OPACITY,
+                self._positive_int(normalized["widget_opacity"], 100),
+            ),
         )
         for key, default_value in (
             ("work_end_message", "Рабочий период завершен. Время отдохнуть."),

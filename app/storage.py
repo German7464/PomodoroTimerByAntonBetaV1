@@ -16,9 +16,16 @@ from app.config import (
     DEFAULT_WORK_MINUTES,
 )
 from app.models import AppSettings, TimeDisplayFormat
+from app.theme import (
+    DEFAULT_APPEARANCE_MODE,
+    DEFAULT_THEME_NAME,
+    normalize_appearance_mode,
+    normalize_theme_name,
+)
 from app.widget_settings import (
     DEFAULT_WIDGET_SIZE,
     DEFAULT_WIDGET_TYPE,
+    MIN_WIDGET_OPACITY,
     normalize_widget_layouts,
     normalize_widget_size,
     normalize_widget_type,
@@ -65,6 +72,8 @@ def default_settings_data() -> dict[str, Any]:
         "time_display_format": DEFAULT_TIME_DISPLAY_FORMAT,
         "minimize_to_tray_on_start": DEFAULT_MINIMIZE_TO_TRAY_ON_START,
         "close_to_tray": True,
+        "theme_name": DEFAULT_THEME_NAME,
+        "appearance_mode": DEFAULT_APPEARANCE_MODE,
         "widget_enabled": False,
         "widget_type": DEFAULT_WIDGET_TYPE,
         "widget_size": DEFAULT_WIDGET_SIZE,
@@ -91,6 +100,10 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
     settings["auto_start_next_period"] = bool(settings["auto_start_next_period"])
     settings["minimize_to_tray_on_start"] = bool(settings["minimize_to_tray_on_start"])
     settings["close_to_tray"] = bool(settings["close_to_tray"])
+    settings["theme_name"] = normalize_theme_name(settings.get("theme_name"))
+    settings["appearance_mode"] = normalize_appearance_mode(
+        settings.get("appearance_mode"),
+    )
     settings["widget_enabled"] = bool(settings["widget_enabled"])
     settings["widget_always_on_top"] = bool(settings["widget_always_on_top"])
     settings["widget_type"] = normalize_widget_type(settings.get("widget_type"))
@@ -124,7 +137,10 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
         settings[key] = message or default_value
 
     try:
-        settings["widget_opacity"] = min(100, max(20, int(settings["widget_opacity"])))
+        settings["widget_opacity"] = min(
+            100,
+            max(MIN_WIDGET_OPACITY, int(settings["widget_opacity"])),
+        )
     except (TypeError, ValueError):
         settings["widget_opacity"] = 100
 
@@ -156,8 +172,11 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
 
 def load_app_settings(path: Path) -> AppSettings:
     """Загружает настройки приложения и мягко мигрирует старый формат."""
-    settings_data = normalize_settings_data(load_json(path, default_settings_data()))
-    save_json(path, settings_data)
+    path_existed = path.exists()
+    raw_data = load_json(path, default_settings_data())
+    settings_data = normalize_settings_data(raw_data)
+    if not path_existed or raw_data != settings_data:
+        save_json(path, settings_data)
     known_settings = {
         key: value
         for key, value in settings_data.items()
@@ -168,6 +187,8 @@ def load_app_settings(path: Path) -> AppSettings:
 
 def save_app_settings(path: Path, settings: AppSettings) -> None:
     """Сохраняет настройки приложения в settings.json."""
+    settings.theme_name = normalize_theme_name(settings.theme_name)
+    settings.appearance_mode = normalize_appearance_mode(settings.appearance_mode)
     settings.widget_type = normalize_widget_type(settings.widget_type)
     settings.widget_layouts = normalize_widget_layouts(
         settings.widget_layouts,

@@ -27,6 +27,7 @@ from app.widget_settings import (
     WIDGET_TYPE_EXPANDED,
     WIDGET_TYPE_MINIMAL,
     clamp_window_position,
+    content_fitted_dimensions,
     default_widget_layouts,
     normalize_widget_layouts,
     set_widget_layout_size,
@@ -153,6 +154,16 @@ class WidgetSettingsTests(unittest.TestCase):
             widget_view_class(widget_type)
 
         self.assertEqual(asdict(timer.state), before)
+
+    def test_content_fit_expands_for_dpi_without_shrinking_presets(self) -> None:
+        self.assertEqual(
+            content_fitted_dimensions(200, 110, 282, 167, 180, 100),
+            (282, 167),
+        )
+        self.assertEqual(
+            content_fitted_dimensions(340, 215, 300, 180, 330, 205),
+            (340, 215),
+        )
 
     def test_display_state_preserves_normal_and_overrun_text_for_all_views(self) -> None:
         timer = TimerEngine(make_settings())

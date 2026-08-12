@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from app.models import AppSettings, TimerMode
+from app.theme import ThemeManager
 
 try:
     import winsound
@@ -15,10 +16,16 @@ except ImportError:  # pragma: no cover - на не-Windows системах win
 class NotificationService:
     """Показывает уведомления о периодах без сторонних библиотек."""
 
-    def __init__(self, parent: tk.Tk, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        parent: tk.Tk,
+        settings: AppSettings,
+        theme_manager: ThemeManager | None = None,
+    ) -> None:
         """Запоминает главное окно, чтобы показывать уведомления поверх него."""
         self.parent = parent
         self.settings = settings
+        self.theme_manager = theme_manager
         self._active_window: tk.Toplevel | None = None
 
     def update_settings(self, settings: AppSettings) -> None:
@@ -97,10 +104,16 @@ class NotificationService:
         window.transient(self.parent)
         window.attributes("-topmost", True)
 
-        frame = ttk.Frame(window, padding=16)
+        frame = ttk.Frame(window, padding=20, style="Card.TFrame")
         frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frame, text=message, wraplength=360, justify=tk.LEFT).pack(pady=(0, 12))
+        ttk.Label(
+            frame,
+            text=message,
+            wraplength=360,
+            justify=tk.LEFT,
+            style="Card.TLabel",
+        ).pack(pady=(0, 16))
 
         def handle_button() -> None:
             # В ручном режиме callback выполняет единый переход и запись
@@ -109,8 +122,15 @@ class NotificationService:
                 command()
             self._destroy_popup(window)
 
-        ttk.Button(frame, text=button_text, command=handle_button).pack(anchor=tk.E)
+        ttk.Button(
+            frame,
+            text=button_text,
+            command=handle_button,
+            style="Accent.TButton",
+        ).pack(anchor=tk.E)
         window.protocol("WM_DELETE_WINDOW", lambda: self._destroy_popup(window))
+        if self.theme_manager is not None:
+            self.theme_manager.apply_to_window(window)
 
         if self.settings.auto_start_next_period:
             window.after(10000, lambda: self._destroy_popup(window))

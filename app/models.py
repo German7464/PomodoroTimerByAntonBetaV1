@@ -39,6 +39,8 @@ class TimerProfile:
     autostart_enabled: bool = False
     minimize_to_tray_on_start: bool = False
     close_to_tray: bool = True
+    theme_name: str = "Comet"
+    appearance_mode: str = "light"
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"
@@ -71,6 +73,8 @@ class AppSettings:
     time_display_format: str = TimeDisplayFormat.HOURS_MINUTES_SECONDS.value
     minimize_to_tray_on_start: bool = False
     close_to_tray: bool = True
+    theme_name: str = "Comet"
+    appearance_mode: str = "light"
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"

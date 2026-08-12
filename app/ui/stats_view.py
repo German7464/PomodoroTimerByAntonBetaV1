@@ -38,10 +38,19 @@ class StatsView(ttk.Frame):
 
     def _build_ui(self) -> None:
         """Создает две колонки: за сегодня и за все время."""
+        ttk.Label(self, text="Статистика", style="Heading.TLabel").pack(
+            anchor=tk.W,
+            pady=(0, 12),
+        )
         buttons = ttk.Frame(self)
         buttons.pack(fill=tk.X, pady=(0, 12))
 
-        ttk.Button(buttons, text="Обновить", command=self.refresh).pack(side=tk.LEFT)
+        ttk.Button(
+            buttons,
+            text="Обновить",
+            command=self.refresh,
+            style="Ghost.TButton",
+        ).pack(side=tk.LEFT)
         ttk.Button(
             buttons,
             text="Сбросить статистику",
@@ -51,10 +60,10 @@ class StatsView(ttk.Frame):
         columns = ttk.Frame(self)
         columns.pack(fill=tk.BOTH, expand=True)
 
-        today_frame = ttk.LabelFrame(columns, text="Сегодня", padding=12)
+        today_frame = ttk.LabelFrame(columns, text="Сегодня", padding=18)
         today_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
 
-        all_time_frame = ttk.LabelFrame(columns, text="За все время", padding=12)
+        all_time_frame = ttk.LabelFrame(columns, text="За всё время", padding=18)
         all_time_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=(8, 0))
 
         columns.columnconfigure(0, weight=1)
@@ -81,13 +90,13 @@ class StatsView(ttk.Frame):
         ]
 
         for row_index, (key, text) in enumerate(rows):
-            ttk.Label(parent, text=f"{text}:").grid(
+            ttk.Label(parent, text=f"{text}:", style="Card.TLabel").grid(
                 row=row_index,
                 column=0,
                 sticky=tk.W,
                 pady=2,
             )
-            value_label = ttk.Label(parent, text="0")
+            value_label = ttk.Label(parent, text="0", style="Card.StatValue.TLabel")
             value_label.grid(row=row_index, column=1, sticky=tk.E, padx=(16, 0), pady=2)
             labels[key] = value_label
 

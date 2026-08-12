@@ -13,9 +13,19 @@ from app.autostart import (
 from app.config import DEFAULT_PROFILE_NAME, PROFILES_FILE, is_frozen_app
 from app.models import AppSettings, TimeDisplayFormat
 from app.profiles import ProfilesService
+from app.theme import (
+    APPEARANCE_DARK,
+    APPEARANCE_LABELS,
+    APPEARANCE_LIGHT,
+    THEME_NAMES,
+    get_palette,
+    normalize_appearance_mode,
+    normalize_theme_name,
+)
 from app.widget_settings import (
     DEFAULT_WIDGET_X,
     DEFAULT_WIDGET_Y,
+    MIN_WIDGET_OPACITY,
     WIDGET_SIZES,
     WIDGET_TYPES,
     normalize_widget_layouts,
@@ -32,12 +42,14 @@ class SettingsView(ttk.Frame):
         settings: AppSettings,
         on_save: Callable[[AppSettings, bool], None],
         autostart_status: str = AUTOSTART_DISABLED,
+        on_theme_change: Callable[[str, str], None] | None = None,
     ) -> None:
         """Создает вкладку настроек и загружает профили."""
         super().__init__(parent, padding=12)
         self.settings = settings
         self.personal_settings = settings
         self.on_save = on_save
+        self.on_theme_change = on_theme_change
         self.autostart_status = autostart_status
         self.profiles = ProfilesService(PROFILES_FILE)
 
@@ -57,16 +69,17 @@ class SettingsView(ttk.Frame):
         self.work_end_message_var = tk.StringVar(value=settings.work_end_message)
         self.short_break_end_message_var = tk.StringVar(value=settings.short_break_end_message)
         self.long_break_end_message_var = tk.StringVar(value=settings.long_break_end_message)
+        self.theme_name_var = tk.StringVar(value=settings.theme_name)
+        self.appearance_mode_var = tk.StringVar(value=settings.appearance_mode)
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
-        self.widget_background_color_var = tk.StringVar(value=settings.widget_background_color)
-        self.widget_text_color_var = tk.StringVar(value=settings.widget_text_color)
         self.widget_opacity_var = tk.IntVar(value=settings.widget_opacity)
         self.widget_always_on_top_var = tk.BooleanVar(value=settings.widget_always_on_top)
         self.autostart_status_label: ttk.Label | None = None
         self.autostart_checkbutton: ttk.Checkbutton | None = None
         self.autostart_update_button: ttk.Button | None = None
+        self.theme_previews: dict[str, tuple[tk.Frame, list[tk.Label]]] = {}
 
         self._build_ui()
         self._reload_profiles_list()
@@ -77,6 +90,7 @@ class SettingsView(ttk.Frame):
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True)
 
+        theme_tab = ttk.Frame(notebook, padding=18)
         time_tab = ttk.Frame(notebook, padding=16)
         logic_tab = ttk.Frame(notebook, padding=16)
         notifications_tab = ttk.Frame(notebook, padding=16)
@@ -84,6 +98,7 @@ class SettingsView(ttk.Frame):
         profiles_tab = ttk.Frame(notebook, padding=16)
         tray_tab = ttk.Frame(notebook, padding=16)
 
+        notebook.add(theme_tab, text="Оформление")
         notebook.add(time_tab, text="Время")
         notebook.add(logic_tab, text="Логика таймера")
         notebook.add(notifications_tab, text="Уведомления")
@@ -91,6 +106,7 @@ class SettingsView(ttk.Frame):
         notebook.add(profiles_tab, text="Профили")
         notebook.add(tray_tab, text="Трей и автозапуск")
 
+        self._build_theme_settings(theme_tab)
         self._build_time_settings(time_tab)
         self._build_logic_settings(logic_tab)
         self._build_notification_settings(notifications_tab)
@@ -101,6 +117,66 @@ class SettingsView(ttk.Frame):
         footer = ttk.Frame(self)
         footer.pack(fill=tk.X, pady=(12, 0))
         ttk.Button(footer, text="Сохранить настройки", command=self._save).pack(side=tk.RIGHT)
+
+    def _build_theme_settings(self, parent: ttk.Frame) -> None:
+        """Создает карточки готовых палитр и переключатель светлого/тёмного режима."""
+        ttk.Label(parent, text="Цветовая тема", style="Heading.TLabel").grid(
+            row=0,
+            column=0,
+            columnspan=3,
+            sticky=tk.W,
+            pady=(0, 12),
+        )
+        descriptions = {
+            "Comet": "Нейтральная и спокойная",
+            "Aurora": "Холодная с сине-фиолетовым акцентом",
+            "Warm": "Мягкая тёплая палитра",
+        }
+        for column, theme_name in enumerate(THEME_NAMES):
+            card = ttk.LabelFrame(parent, text=theme_name, padding=12)
+            card.grid(row=1, column=column, sticky=tk.NSEW, padx=(0, 10), pady=(0, 16))
+            ttk.Radiobutton(
+                card,
+                text="Выбрать",
+                value=theme_name,
+                variable=self.theme_name_var,
+                command=self._on_theme_selection,
+                style="Card.TRadiobutton",
+            ).pack(anchor=tk.W)
+            ttk.Label(
+                card,
+                text=descriptions[theme_name],
+                style="Card.Secondary.TLabel",
+                wraplength=180,
+            ).pack(anchor=tk.W, pady=(3, 9))
+            preview = tk.Frame(card, borderwidth=0, highlightthickness=0)
+            preview.pack(fill=tk.X)
+            swatches: list[tk.Label] = []
+            for _index in range(4):
+                swatch = tk.Label(preview, text="", width=4, height=1, borderwidth=0)
+                swatch.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+                swatches.append(swatch)
+            self.theme_previews[theme_name] = (preview, swatches)
+            parent.columnconfigure(column, weight=1)
+
+        mode_card = ttk.Frame(parent, style="Card.TFrame", padding=14)
+        mode_card.grid(row=2, column=0, columnspan=3, sticky=tk.EW)
+        ttk.Label(mode_card, text="Режим:", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 12))
+        for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
+            ttk.Radiobutton(
+                mode_card,
+                text=APPEARANCE_LABELS[mode],
+                value=mode,
+                variable=self.appearance_mode_var,
+                command=self._on_theme_selection,
+                style="Card.TRadiobutton",
+            ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(
+            parent,
+            text="Тема применяется сразу ко всем открытым окнам и не влияет на таймер.",
+            style="Secondary.TLabel",
+        ).grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=(12, 0))
+        self._refresh_theme_previews()
 
     def _build_time_settings(self, parent: ttk.Frame) -> None:
         """Группа настроек длительности и формата времени."""
@@ -178,20 +254,22 @@ class SettingsView(ttk.Frame):
         )
         size_box.grid(row=1, column=1, sticky=tk.W, pady=6)
         size_box.bind("<<ComboboxSelected>>", self._on_widget_size_selected)
-        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 2, width=12)
-        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 3, width=12)
-        ttk.Label(parent, text="Прозрачность, %:").grid(row=4, column=0, sticky=tk.W, pady=6)
-        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=4, column=1, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        ttk.Label(parent, text="Прозрачность, %:").grid(row=2, column=0, sticky=tk.W, pady=6)
+        ttk.Scale(parent, from_=MIN_WIDGET_OPACITY, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=2, column=1, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         ttk.Label(
             parent,
             text=(
                 "После сохранения вид меняется без перезапуска и сброса таймера.\n"
                 "Ручное изменение окна автоматически выбирает размер «Пользовательский»."
             ),
-        ).grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
-        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ttk.Label(
+            parent,
+            text="Цвета виджета задаются выбранной темой оформления.",
+            style="Secondary.TLabel",
+        ).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
 
     def _build_profiles_settings(self, parent: ttk.Frame) -> None:
         """Группа управления профилями."""
@@ -245,6 +323,37 @@ class SettingsView(ttk.Frame):
         )
         if self.widget_type_var.get() == widget_type:
             self.widget_size_var.set(settings.widget_size)
+
+    def sync_theme(self, theme_name: str, appearance_mode: str) -> None:
+        """Синхронизирует карточки с быстрым переключателем главного окна."""
+        self.theme_name_var.set(normalize_theme_name(theme_name))
+        self.appearance_mode_var.set(normalize_appearance_mode(appearance_mode))
+        self._refresh_theme_previews()
+
+    def _on_theme_selection(self) -> None:
+        """Применяет выбор карточки сразу, не ожидая сохранения всей формы."""
+        theme_name = normalize_theme_name(self.theme_name_var.get())
+        appearance_mode = normalize_appearance_mode(self.appearance_mode_var.get())
+        self.theme_name_var.set(theme_name)
+        self.appearance_mode_var.set(appearance_mode)
+        self._refresh_theme_previews()
+        if self.on_theme_change is not None:
+            self.on_theme_change(theme_name, appearance_mode)
+
+    def _refresh_theme_previews(self) -> None:
+        """Показывает четыре смысловых цвета каждой темы в активном режиме."""
+        mode = normalize_appearance_mode(self.appearance_mode_var.get())
+        for theme_name, (preview, swatches) in self.theme_previews.items():
+            palette = get_palette(theme_name, mode)
+            preview.configure(background=palette.card_background)
+            colors = (
+                palette.background,
+                palette.card_background,
+                palette.accent,
+                palette.text_primary,
+            )
+            for swatch, color in zip(swatches, colors, strict=True):
+                swatch.configure(background=color)
 
     def _autostart_status_text(self) -> str:
         """Возвращает понятное описание текущего состояния автозапуска."""
@@ -390,12 +499,14 @@ class SettingsView(ttk.Frame):
             time_display_format=self.time_display_format_var.get(),
             minimize_to_tray_on_start=self.minimize_to_tray_on_start_var.get(),
             close_to_tray=self.close_to_tray_var.get(),
+            theme_name=normalize_theme_name(self.theme_name_var.get()),
+            appearance_mode=normalize_appearance_mode(self.appearance_mode_var.get()),
             widget_enabled=self.settings.widget_enabled,
             widget_type=widget_type,
             widget_size=self.widget_size_var.get(),
             widget_layouts=deepcopy(self.widget_layouts),
-            widget_background_color=self._safe_color(self.widget_background_color_var.get(), self.settings.widget_background_color),
-            widget_text_color=self._safe_color(self.widget_text_color_var.get(), self.settings.widget_text_color),
+            widget_background_color=self.settings.widget_background_color,
+            widget_text_color=self.settings.widget_text_color,
             widget_opacity=self._bounded_opacity(),
             widget_always_on_top=self.widget_always_on_top_var.get(),
             widget_x=int(active_layout["x"]),
@@ -420,14 +531,15 @@ class SettingsView(ttk.Frame):
         self.work_end_message_var.set(settings.work_end_message)
         self.short_break_end_message_var.set(settings.short_break_end_message)
         self.long_break_end_message_var.set(settings.long_break_end_message)
+        self.theme_name_var.set(settings.theme_name)
+        self.appearance_mode_var.set(settings.appearance_mode)
         self.widget_type_var.set(settings.widget_type)
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
-        self.widget_background_color_var.set(settings.widget_background_color)
-        self.widget_text_color_var.set(settings.widget_text_color)
         self.widget_opacity_var.set(settings.widget_opacity)
         self.widget_always_on_top_var.set(settings.widget_always_on_top)
         self._update_long_break_controls()
+        self._refresh_theme_previews()
 
     def _preserve_widget_visibility(self, settings: AppSettings) -> None:
         """Не позволяет профилям подменять состояние кнопки главного окна."""
@@ -488,22 +600,12 @@ class SettingsView(ttk.Frame):
             return default
 
     def _bounded_opacity(self) -> int:
-        """Возвращает прозрачность в диапазоне от 20 до 100."""
+        """Возвращает прозрачность в безопасном для читаемости диапазоне."""
         try:
-            return min(100, max(20, int(self.widget_opacity_var.get())))
+            return min(100, max(MIN_WIDGET_OPACITY, int(self.widget_opacity_var.get())))
         except (tk.TclError, ValueError):
             return 100
 
-    def _safe_color(self, value: str, default: str) -> str:
-        """Проверяет цвет в формате #RRGGBB."""
-        color = value.strip()
-        if len(color) == 7 and color.startswith("#"):
-            try:
-                int(color[1:], 16)
-                return color
-            except ValueError:
-                return default
-        return default
 
 
 class SettingsWindow:

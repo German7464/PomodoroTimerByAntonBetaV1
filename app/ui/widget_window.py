@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import tkinter as tk
 
 from app.models import AppSettings
+from app.theme import ThemeManager, ThemePalette, mode_color
 from app.timer_engine import TimerEngine
 from app.widget_settings import (
     WIDGET_MIN_SIZES,
@@ -15,6 +16,7 @@ from app.widget_settings import (
     WIDGET_TYPE_MINIMAL,
     WidgetSizeParameters,
     clamp_window_position,
+    content_fitted_dimensions,
     normalize_widget_layouts,
     normalize_widget_type,
     widget_size_parameters,
@@ -78,6 +80,8 @@ class WidgetView:
         self.mode_label: tk.Label
         self.time_label: tk.Label
         self.buttons: list[tk.Button] = []
+        self.accent_buttons: list[tk.Button] = []
+        self.palette: ThemePalette | None = None
         self.drag_widgets: list[tk.Widget] = [self.frame]
 
     def update(self) -> None:
@@ -85,33 +89,55 @@ class WidgetView:
         display = widget_display_state(self.timer)
         self.mode_label.config(text=display.mode_name)
         self.time_label.config(text=display.formatted_time)
+        self._apply_state_colors()
 
     def apply_style(
         self,
-        background: str,
-        foreground: str,
+        palette: ThemePalette,
         parameters: WidgetSizeParameters,
     ) -> None:
         """Применяет цвета и адаптивные шрифты ко всем общим элементам."""
+        self.palette = palette
+        background = palette.card_background
         self.frame.configure(bg=background)
         self.mode_label.configure(
             bg=background,
-            fg=foreground,
-            font=("Segoe UI", parameters.mode_font, "bold"),
+            font=("Segoe UI Semibold", parameters.mode_font),
         )
         self.time_label.configure(
             bg=background,
-            fg=foreground,
-            font=("Segoe UI", parameters.time_font, "bold"),
+            font=("Segoe UI Semibold", parameters.time_font),
         )
         for button in self.buttons:
+            is_accent = button in self.accent_buttons
             button.configure(
-                bg=background,
-                fg=foreground,
-                activebackground=foreground,
-                activeforeground=background,
-                font=("Segoe UI", parameters.button_font),
+                bg=palette.accent if is_accent else palette.secondary_background,
+                fg=palette.on_accent if is_accent else palette.text_primary,
+                activebackground=palette.accent_hover,
+                activeforeground=palette.on_accent,
+                disabledforeground=palette.disabled,
+                highlightbackground=palette.border,
+                highlightcolor=palette.focus,
+                highlightthickness=1,
+                font=("Segoe UI Semibold", parameters.button_font),
             )
+        self._apply_state_colors()
+
+    def _apply_state_colors(self) -> None:
+        """Обновляет семантический цвет режима при обычном тике и превышении."""
+        if self.palette is None:
+            return
+        state_color = mode_color(
+            self.palette,
+            self.timer.state.mode,
+            self.timer.state.waiting_for_continue,
+        )
+        self.mode_label.configure(fg=state_color)
+        self.time_label.configure(
+            fg=self.palette.overrun
+            if self.timer.state.waiting_for_continue
+            else self.palette.text_primary,
+        )
 
     def destroy(self) -> None:
         """Удаляет только содержимое, сохраняя Toplevel и TimerEngine."""
@@ -128,18 +154,27 @@ class WidgetView:
         else:
             self.actions.toggle_timer()
 
-    def _button(self, parent: tk.Widget, text: str, command: Callable[[], None]) -> tk.Button:
+    def _button(
+        self,
+        parent: tk.Widget,
+        text: str,
+        command: Callable[[], None],
+        *,
+        accent: bool = False,
+    ) -> tk.Button:
         """Создает одинаковую доступную кнопку без отдельной ttk-темы."""
         button = tk.Button(
             parent,
             text=text,
             command=command,
-            relief=tk.GROOVE,
-            borderwidth=1,
+            relief=tk.FLAT,
+            borderwidth=0,
             cursor="hand2",
             takefocus=True,
         )
         self.buttons.append(button)
+        if accent:
+            self.accent_buttons.append(button)
         return button
 
 
@@ -160,6 +195,7 @@ class MinimalWidgetView(WidgetView):
             self.frame,
             "Продолжить",
             self.actions.continue_period,
+            accent=True,
         )
         self.continue_button.grid(row=2, column=0, padx=12, pady=(0, 8))
         self.drag_widgets.extend((self.mode_label, self.time_label))
@@ -185,7 +221,12 @@ class CompactWidgetView(WidgetView):
         self.mode_label.grid(row=0, column=0, sticky=tk.NSEW, padx=12, pady=(8, 0))
         self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
         self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=12)
-        self.primary_button = self._button(self.frame, "Старт", self._handle_primary)
+        self.primary_button = self._button(
+            self.frame,
+            "Старт",
+            self._handle_primary,
+            accent=True,
+        )
         self.primary_button.grid(row=2, column=0, padx=12, pady=(0, 10), ipadx=12)
         self.drag_widgets.extend((self.mode_label, self.time_label))
 
@@ -217,7 +258,12 @@ class ExpandedWidgetView(WidgetView):
         controls.grid(row=2, column=0, sticky=tk.EW, padx=12, pady=(0, 10))
         for column in range(4):
             controls.columnconfigure(column, weight=1)
-        self.primary_button = self._button(controls, "Старт", self._handle_primary)
+        self.primary_button = self._button(
+            controls,
+            "Старт",
+            self._handle_primary,
+            accent=True,
+        )
         self.primary_button.grid(row=0, column=0, sticky=tk.EW, padx=2)
         self.skip_button = self._button(controls, "Пропустить", self.actions.skip_period)
         self.skip_button.grid(row=0, column=1, sticky=tk.EW, padx=2)
@@ -242,16 +288,16 @@ class ExpandedWidgetView(WidgetView):
 
     def apply_style(
         self,
-        background: str,
-        foreground: str,
+        palette: ThemePalette,
         parameters: WidgetSizeParameters,
     ) -> None:
-        super().apply_style(background, foreground, parameters)
+        super().apply_style(palette, parameters)
+        background = palette.card_background
         for container in (self.header, self.controls):
             container.configure(bg=background)
         self.cycle_label.configure(
             bg=background,
-            fg=foreground,
+            fg=palette.text_secondary,
             font=("Segoe UI", parameters.mode_font),
         )
 
@@ -282,6 +328,7 @@ class WidgetWindow:
         save_settings: Callable[[AppSettings], None],
         on_visibility_requested: Callable[[bool], None],
         on_layout_changed: Callable[[AppSettings], None] | None = None,
+        theme_manager: ThemeManager | None = None,
     ) -> None:
         self.parent = parent
         self.timer = timer
@@ -290,6 +337,7 @@ class WidgetWindow:
         self._save_settings = save_settings
         self._on_visibility_requested = on_visibility_requested
         self._on_layout_changed = on_layout_changed
+        self.theme_manager = theme_manager
         self.window: tk.Toplevel | None = None
         self.view: WidgetView | None = None
         self._active_view_type: str | None = None
@@ -300,6 +348,9 @@ class WidgetWindow:
         self._accept_user_configure = False
         self._programmatic_size: tuple[int, int] | None = None
         self._last_size: tuple[int, int] | None = None
+        self._content_expanded = False
+        if self.theme_manager is not None:
+            self.theme_manager.register(self.apply_theme)
 
     def apply_settings(self, settings: AppSettings) -> None:
         """Мгновенно применяет вид, размер и прежние параметры без сброса таймера."""
@@ -354,7 +405,8 @@ class WidgetWindow:
         minimum_width, minimum_height = WIDGET_MIN_SIZES[settings.widget_type]
         self.window.minsize(minimum_width, minimum_height)
         self.window.resizable(True, True)
-        self.window.configure(bg=settings.widget_background_color)
+        palette = self._palette()
+        self.window.configure(bg=palette.card_background)
         self.window.attributes("-alpha", settings.widget_opacity / 100)
         self.window.attributes("-topmost", settings.widget_always_on_top)
         self._set_geometry(width, height, x, y)
@@ -371,6 +423,25 @@ class WidgetWindow:
         ):
             return
         self.view.update()
+        self._fit_window_to_content()
+
+    def apply_theme(self, palette: ThemePalette) -> None:
+        """Обновляет открытый виджет без смены типа, геометрии или TimerEngine."""
+        if self.window is None or self.view is None:
+            return
+        if self.theme_manager is not None:
+            self.theme_manager.apply_to_window(self.window)
+        width = max(1, self.window.winfo_width())
+        height = max(1, self.window.winfo_height())
+        parameters = widget_size_parameters(
+            self.settings.widget_type,
+            self.settings.widget_size,
+            width,
+            height,
+        )
+        self.view.apply_style(palette, parameters)
+        self.view.update()
+        self._fit_window_to_content()
 
     def is_visible(self) -> bool:
         """Возвращает фактическую видимость единственного Toplevel."""
@@ -390,6 +461,7 @@ class WidgetWindow:
         self._accept_user_configure = False
         self._programmatic_size = None
         self._last_size = None
+        self._content_expanded = False
         self._save_after_id = None
         self._enable_configure_after_id = None
         if window is None:
@@ -421,6 +493,7 @@ class WidgetWindow:
         view_class = widget_view_class(widget_type)
         self.view = view_class(self.window, self.timer, self.actions)
         self._active_view_type = normalize_widget_type(widget_type)
+        self._content_expanded = False
         for widget in self.view.drag_widgets:
             widget.bind("<ButtonPress-1>", self._start_drag)
             widget.bind("<B1-Motion>", self._drag)
@@ -459,6 +532,7 @@ class WidgetWindow:
             layout = self.settings.widget_layouts[self.settings.widget_type]
             layout["size"] = WIDGET_SIZE_CUSTOM
             self._programmatic_size = None
+            self._content_expanded = False
 
         current_size = (
             WIDGET_SIZE_CUSTOM
@@ -478,10 +552,64 @@ class WidgetWindow:
             width,
             height,
         )
-        self.view.apply_style(
-            self.settings.widget_background_color,
-            self.settings.widget_text_color,
-            parameters,
+        self.view.apply_style(self._palette(), parameters)
+
+    def _palette(self) -> ThemePalette:
+        """Возвращает текущую общую палитру с безопасным fallback."""
+        if self.theme_manager is not None:
+            return self.theme_manager.palette
+        from app.theme import get_palette
+
+        return get_palette(self.settings.theme_name, self.settings.appearance_mode)
+
+    def _fit_window_to_content(self) -> None:
+        """Не дает DPI и длинным названиям обрезать элементы, не меняя пресет."""
+        if self.window is None or self.view is None:
+            return
+        frame = getattr(self.view, "frame", None)
+        if frame is None:
+            return
+        frame.update_idletasks()
+        layout = self.settings.widget_layouts[self.settings.widget_type]
+        target_width = int(layout["width"])
+        target_height = int(layout["height"])
+        required_width = frame.winfo_reqwidth()
+        required_height = frame.winfo_reqheight()
+        minimum_width, minimum_height = WIDGET_MIN_SIZES[self.settings.widget_type]
+        fitted_width, fitted_height = content_fitted_dimensions(
+            target_width,
+            target_height,
+            required_width,
+            required_height,
+            minimum_width,
+            minimum_height,
+        )
+        self.window.minsize(
+            max(minimum_width, required_width),
+            max(minimum_height, required_height),
+        )
+
+        current_width = max(1, self.window.winfo_width())
+        current_height = max(1, self.window.winfo_height())
+        if (current_width, current_height) == (fitted_width, fitted_height):
+            self._content_expanded = (
+                fitted_width != target_width or fitted_height != target_height
+            )
+            return
+        must_expand = current_width < fitted_width or current_height < fitted_height
+        if not must_expand and not self._content_expanded:
+            return
+
+        x, y = clamp_window_position(
+            int(layout["x"]),
+            int(layout["y"]),
+            fitted_width,
+            fitted_height,
+            self._screen_bounds(),
+        )
+        self._set_geometry(fitted_width, fitted_height, x, y)
+        self._content_expanded = (
+            fitted_width != target_width or fitted_height != target_height
         )
 
     def _schedule_layout_save(self) -> None:

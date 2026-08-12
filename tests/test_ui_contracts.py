@@ -40,6 +40,13 @@ class FakeWidgetWindow:
         self.time = self.timer.formatted_time()
 
 
+class FakeThemeManager:
+    """Возвращает имя стиля режима без создания ttk.Style."""
+
+    def mode_style(self, _mode, waiting_for_continue: bool) -> str:
+        return "Overrun.TimerMode.TLabel" if waiting_for_continue else "Work.TimerMode.TLabel"
+
+
 class FakePopup:
     """Окно уведомления без Tk."""
 
@@ -98,6 +105,7 @@ def prepare_main_window(timer: TimerEngine, statistics: StatisticsService) -> Ma
     window.time_label = FakeWidget()
     window.status_label = FakeWidget()
     window.widget_window = FakeWidgetWindow(timer)
+    window.theme_manager = FakeThemeManager()
     return window
 
 
