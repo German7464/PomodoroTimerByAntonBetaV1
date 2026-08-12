@@ -43,7 +43,7 @@ CHANGELOG.md                    история изменений
 
 ## Основные связи
 
-`MainWindow` создает ровно один `TimerEngine`. Главное окно и три переключаемых представления одного `WidgetWindow` читают из него `mode_name()` и `formatted_time()`, поэтому отдельного таймера и дополнительного цикла обновления в виджете нет. Детали находятся в `docs/WIDGETS.md`.
+`MainWindow` создает ровно один `TimerEngine` и один контроллер `WidgetWindow`. `MainWindow.set_widget_visibility()` синхронизирует кнопку главного окна, существующее поле `settings.widget_enabled` и фактический `Toplevel`; крестик виджета возвращается в эту же функцию callback-ом. Сам `Toplevel` создается лениво и переиспользуется после `withdraw()`. Главное окно и три переключаемых представления читают из общего таймера `mode_name()` и `formatted_time()`, поэтому отдельного таймера и дополнительного цикла обновления в виджете нет. Детали находятся в `docs/WIDGETS.md`.
 
 Обычный секундный поток:
 
@@ -59,7 +59,7 @@ Tk.after → MainWindow._schedule_tick() → TimerEngine.tick()
 
 До этой композиции `main.py` получает именованный mutex из `single_instance.py`; только владелец блокировки импортирует и создает `MainWindow`. Подробности находятся в `docs/STARTUP.md`.
 
-`config.py` выбирает каталог данных. `storage.py`, `profiles.py` и `statistics.py` отвечают за конкретные JSON. `SettingsView` возвращает новый `AppSettings` в `MainWindow.apply_settings()`, после чего настройки получают таймер, уведомления и виджет.
+`config.py` выбирает каталог данных. `storage.py`, `profiles.py` и `statistics.py` отвечают за конкретные JSON. `SettingsView` возвращает новый `AppSettings` в `MainWindow.apply_settings()`, после чего настройки получают таймер, уведомления и виджет. В форме остаются тип, размер и оформление виджета, но видимость меняет только кнопка главного окна; профиль и сохранение формы сохраняют текущее значение `widget_enabled`.
 
 ## Пользовательские данные и JSON
 

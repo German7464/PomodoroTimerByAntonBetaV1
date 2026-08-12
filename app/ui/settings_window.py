@@ -57,7 +57,6 @@ class SettingsView(ttk.Frame):
         self.work_end_message_var = tk.StringVar(value=settings.work_end_message)
         self.short_break_end_message_var = tk.StringVar(value=settings.short_break_end_message)
         self.long_break_end_message_var = tk.StringVar(value=settings.long_break_end_message)
-        self.widget_enabled_var = tk.BooleanVar(value=settings.widget_enabled)
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
@@ -159,8 +158,7 @@ class SettingsView(ttk.Frame):
 
     def _build_widget_settings(self, parent: ttk.Frame) -> None:
         """Группа настроек плавающего виджета."""
-        ttk.Checkbutton(parent, text="Виджет включен", variable=self.widget_enabled_var).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Label(parent, text="Тип виджета:").grid(row=1, column=0, sticky=tk.W, pady=6)
+        ttk.Label(parent, text="Тип виджета:").grid(row=0, column=0, sticky=tk.W, pady=6)
         type_box = ttk.Combobox(
             parent,
             values=WIDGET_TYPES,
@@ -168,9 +166,9 @@ class SettingsView(ttk.Frame):
             state="readonly",
             width=18,
         )
-        type_box.grid(row=1, column=1, sticky=tk.W, pady=6)
+        type_box.grid(row=0, column=1, sticky=tk.W, pady=6)
         type_box.bind("<<ComboboxSelected>>", self._on_widget_type_selected)
-        ttk.Label(parent, text="Размер виджета:").grid(row=2, column=0, sticky=tk.W, pady=6)
+        ttk.Label(parent, text="Размер виджета:").grid(row=1, column=0, sticky=tk.W, pady=6)
         size_box = ttk.Combobox(
             parent,
             values=WIDGET_SIZES,
@@ -178,22 +176,22 @@ class SettingsView(ttk.Frame):
             state="readonly",
             width=18,
         )
-        size_box.grid(row=2, column=1, sticky=tk.W, pady=6)
+        size_box.grid(row=1, column=1, sticky=tk.W, pady=6)
         size_box.bind("<<ComboboxSelected>>", self._on_widget_size_selected)
-        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 3, width=12)
-        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 4, width=12)
-        ttk.Label(parent, text="Прозрачность, %:").grid(row=5, column=0, sticky=tk.W, pady=6)
-        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=5, column=1, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 2, width=12)
+        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 3, width=12)
+        ttk.Label(parent, text="Прозрачность, %:").grid(row=4, column=0, sticky=tk.W, pady=6)
+        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=4, column=1, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         ttk.Label(
             parent,
             text=(
                 "После сохранения вид меняется без перезапуска и сброса таймера.\n"
                 "Ручное изменение окна автоматически выбирает размер «Пользовательский»."
             ),
-        ).grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
-        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ).grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
 
     def _build_profiles_settings(self, parent: ttk.Frame) -> None:
         """Группа управления профилями."""
@@ -326,6 +324,7 @@ class SettingsView(ttk.Frame):
             messagebox.showwarning("Профиль", "Выберите профиль из списка.")
             return
         settings = self.profiles.settings_from_profile(profile)
+        self._preserve_widget_visibility(settings)
         self._load_settings_to_form(settings)
         self.on_save(settings, False)
         self.settings = settings
@@ -347,6 +346,7 @@ class SettingsView(ttk.Frame):
     def _restore_default_settings(self) -> None:
         """Возвращает стандартный набор настроек."""
         settings = self.profiles.default_settings()
+        self._preserve_widget_visibility(settings)
         self._load_settings_to_form(settings)
         self.on_save(settings, False)
         self.settings = settings
@@ -354,9 +354,11 @@ class SettingsView(ttk.Frame):
 
     def _restore_personal_settings(self) -> None:
         """Возвращает настройки, с которыми пользователь открыл вкладку."""
-        self._load_settings_to_form(self.personal_settings)
-        self.on_save(self.personal_settings, False)
-        self.settings = self.personal_settings
+        settings = self.personal_settings
+        self._preserve_widget_visibility(settings)
+        self._load_settings_to_form(settings)
+        self.on_save(settings, False)
+        self.settings = settings
         self._select_profile(self.personal_settings.active_profile)
 
     def _save(self) -> None:
@@ -388,7 +390,7 @@ class SettingsView(ttk.Frame):
             time_display_format=self.time_display_format_var.get(),
             minimize_to_tray_on_start=self.minimize_to_tray_on_start_var.get(),
             close_to_tray=self.close_to_tray_var.get(),
-            widget_enabled=self.widget_enabled_var.get(),
+            widget_enabled=self.settings.widget_enabled,
             widget_type=widget_type,
             widget_size=self.widget_size_var.get(),
             widget_layouts=deepcopy(self.widget_layouts),
@@ -418,7 +420,6 @@ class SettingsView(ttk.Frame):
         self.work_end_message_var.set(settings.work_end_message)
         self.short_break_end_message_var.set(settings.short_break_end_message)
         self.long_break_end_message_var.set(settings.long_break_end_message)
-        self.widget_enabled_var.set(settings.widget_enabled)
         self.widget_type_var.set(settings.widget_type)
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
@@ -427,6 +428,10 @@ class SettingsView(ttk.Frame):
         self.widget_opacity_var.set(settings.widget_opacity)
         self.widget_always_on_top_var.set(settings.widget_always_on_top)
         self._update_long_break_controls()
+
+    def _preserve_widget_visibility(self, settings: AppSettings) -> None:
+        """Не позволяет профилям подменять состояние кнопки главного окна."""
+        settings.widget_enabled = self.settings.widget_enabled
 
     def _reset_widget_position(self) -> None:
         """Возвращает текущий тип виджета в безопасную область экрана."""

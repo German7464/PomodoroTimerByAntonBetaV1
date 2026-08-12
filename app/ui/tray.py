@@ -16,7 +16,6 @@ class TrayController:
         hide_window: Callable[[], None],
         toggle_timer: Callable[[], None],
         reset_timer: Callable[[], None],
-        toggle_widget: Callable[[], None],
         exit_app: Callable[[], None],
     ) -> None:
         """Получает callback-и главного окна и создает pystray.Icon."""
@@ -24,7 +23,6 @@ class TrayController:
         self._hide_window = hide_window
         self._toggle_timer = toggle_timer
         self._reset_timer = reset_timer
-        self._toggle_widget = toggle_widget
         self._exit_app = exit_app
         self._thread: threading.Thread | None = None
         self.icon = pystray.Icon(
@@ -53,7 +51,6 @@ class TrayController:
             pystray.MenuItem("Скрыть окно", self._run(self._hide_window)),
             pystray.MenuItem("Старт / Пауза", self._run(self._toggle_timer)),
             pystray.MenuItem("Сброс", self._run(self._reset_timer)),
-            pystray.MenuItem("Показать / скрыть виджет", self._run(self._toggle_widget)),
             pystray.MenuItem("Выход", self._run(self._exit_app)),
         )
 

@@ -45,6 +45,7 @@ class MainWindow:
                 show_main_window=self.show_window,
             ),
             save_settings=lambda settings: save_app_settings(SETTINGS_FILE, settings),
+            on_visibility_requested=self.set_widget_visibility,
             on_layout_changed=self._on_widget_layout_changed,
         )
 
@@ -53,7 +54,6 @@ class MainWindow:
             hide_window=self._schedule(self.hide_to_tray),
             toggle_timer=self._schedule(self.toggle_timer_from_tray),
             reset_timer=self._schedule(self.reset),
-            toggle_widget=self._schedule(self.toggle_widget_from_tray),
             exit_app=self._schedule(self.exit_app),
         )
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
@@ -130,6 +130,20 @@ class MainWindow:
         )
         self.continue_button.grid(row=1, column=0, columnspan=4, pady=(12, 0))
 
+        self.widget_toggle_button = ttk.Button(
+            controls,
+            text="Показать виджет",
+            command=self.toggle_widget_visibility,
+        )
+        self.widget_toggle_button.grid(
+            row=2,
+            column=0,
+            columnspan=4,
+            pady=(12, 0),
+        )
+
+        self.set_widget_visibility(self.settings.widget_enabled, persist=False)
+
         if DATA_DIR_WARNING:
             self.root.after(300, lambda: messagebox.showwarning("Portable-режим", DATA_DIR_WARNING))
 
@@ -184,7 +198,7 @@ class MainWindow:
         self.settings = settings
         self.timer.update_settings(settings)
         self.notifications.update_settings(settings)
-        self.widget_window.apply_settings(settings)
+        self.set_widget_visibility(settings.widget_enabled, persist=False)
         save_app_settings(SETTINGS_FILE, settings)
         if should_reset_timer and not self.timer.state.waiting_for_continue:
             self.timer.reset()
@@ -205,6 +219,7 @@ class MainWindow:
 
     def show_window(self) -> None:
         """Показывает главное окно из трея."""
+        self._sync_widget_visibility()
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -244,12 +259,51 @@ class MainWindow:
         self._sync_timer_buttons()
         self._refresh_labels()
 
-    def toggle_widget_from_tray(self) -> None:
-        """Показывает или скрывает виджет из меню трея и сохраняет настройку."""
-        self.settings.widget_enabled = not self.settings.widget_enabled
-        save_app_settings(SETTINGS_FILE, self.settings)
-        self.widget_window.apply_settings(self.settings)
-        self._refresh_labels()
+    def toggle_widget_visibility(self) -> None:
+        """Переключает виджет единственной пользовательской кнопкой."""
+        self.set_widget_visibility(not self.widget_window.is_visible())
+
+    def set_widget_visibility(self, visible: bool, *, persist: bool = True) -> bool:
+        """Применяет, сохраняет и отражает единое состояние видимости виджета."""
+        requested_visibility = bool(visible)
+        self.settings.widget_enabled = requested_visibility
+        error: Exception | None = None
+        try:
+            self.widget_window.apply_settings(self.settings)
+            if self.widget_window.is_visible() != requested_visibility:
+                raise RuntimeError("окно не перешло в запрошенное состояние")
+        except Exception as caught_error:  # UI boundary: show must not stop the timer.
+            error = caught_error
+            if requested_visibility:
+                self.widget_window.discard_window()
+
+        actual_visibility = self.widget_window.is_visible()
+        self.settings.widget_enabled = actual_visibility
+        if persist or actual_visibility != requested_visibility:
+            try:
+                save_app_settings(SETTINGS_FILE, self.settings)
+            except OSError as save_error:
+                if error is None:
+                    error = save_error
+        self._sync_widget_visibility()
+
+        if error is not None:
+            action = "показать" if requested_visibility else "скрыть"
+            messagebox.showwarning(
+                "Виджет",
+                f"Не удалось {action} виджет: {error}",
+            )
+            return False
+        return True
+
+    def _sync_widget_visibility(self) -> None:
+        """Сверяет подпись кнопки и настройку с фактическим Toplevel."""
+        visible = self.widget_window.is_visible()
+        self.settings.widget_enabled = visible
+        if hasattr(self, "widget_toggle_button"):
+            self.widget_toggle_button.config(
+                text="Скрыть виджет" if visible else "Показать виджет",
+            )
 
     def _on_widget_layout_changed(self, settings: AppSettings) -> None:
         """Синхронизирует ручной размер с уже открытой формой настроек."""

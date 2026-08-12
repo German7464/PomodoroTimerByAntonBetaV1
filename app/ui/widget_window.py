@@ -280,6 +280,7 @@ class WidgetWindow:
         settings: AppSettings,
         actions: WidgetActions,
         save_settings: Callable[[AppSettings], None],
+        on_visibility_requested: Callable[[bool], None],
         on_layout_changed: Callable[[AppSettings], None] | None = None,
     ) -> None:
         self.parent = parent
@@ -287,6 +288,7 @@ class WidgetWindow:
         self.settings = settings
         self.actions = actions
         self._save_settings = save_settings
+        self._on_visibility_requested = on_visibility_requested
         self._on_layout_changed = on_layout_changed
         self.window: tk.Toplevel | None = None
         self.view: WidgetView | None = None
@@ -298,7 +300,6 @@ class WidgetWindow:
         self._accept_user_configure = False
         self._programmatic_size: tuple[int, int] | None = None
         self._last_size: tuple[int, int] | None = None
-        self.apply_settings(settings)
 
     def apply_settings(self, settings: AppSettings) -> None:
         """Мгновенно применяет вид, размер и прежние параметры без сброса таймера."""
@@ -371,11 +372,36 @@ class WidgetWindow:
             return
         self.view.update()
 
-    def hide(self) -> None:
-        """Сохраняет последнюю геометрию и скрывает существующее окно."""
-        if self.window is not None:
-            self._persist_current_layout()
-            self.window.withdraw()
+    def is_visible(self) -> bool:
+        """Возвращает фактическую видимость единственного Toplevel."""
+        if self.window is None:
+            return False
+        try:
+            return bool(self.window.winfo_exists()) and self.window.state() != "withdrawn"
+        except tk.TclError:
+            return False
+
+    def discard_window(self) -> None:
+        """Уничтожает частично созданное окно после ошибки показа."""
+        window = self.window
+        self.window = None
+        self.view = None
+        self._active_view_type = None
+        self._accept_user_configure = False
+        self._programmatic_size = None
+        self._last_size = None
+        self._save_after_id = None
+        self._enable_configure_after_id = None
+        if window is None:
+            return
+        try:
+            window.destroy()
+        except tk.TclError:
+            pass
+
+    def _request_hide(self) -> None:
+        """Передает закрытие крестиком единому контроллеру видимости."""
+        self._on_visibility_requested(False)
 
     def _ensure_window(self) -> None:
         """Создает Toplevel один раз за весь срок жизни приложения."""
@@ -383,7 +409,7 @@ class WidgetWindow:
             return
         self.window = tk.Toplevel(self.parent)
         self.window.title("Виджет Pomodoro")
-        self.window.protocol("WM_DELETE_WINDOW", self.hide)
+        self.window.protocol("WM_DELETE_WINDOW", self._request_hide)
         self.window.bind("<Configure>", self._on_configure)
 
     def _rebuild_view(self, widget_type: str) -> None:
