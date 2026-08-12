@@ -96,12 +96,26 @@ class MainWindow:
         )
         self.pause_button.grid(row=0, column=1, padx=5)
 
-        ttk.Button(controls, text="Пропустить период", command=self.skip_period).grid(
+        self.skip_button = ttk.Button(
+            controls,
+            text="Пропустить период",
+            command=self.skip_period,
+        )
+        self.skip_button.grid(
             row=0,
             column=2,
             padx=5,
         )
-        ttk.Button(controls, text="Сброс", command=self.reset).grid(row=0, column=3, padx=5)
+        self.reset_button = ttk.Button(controls, text="Сброс", command=self.reset)
+        self.reset_button.grid(row=0, column=3, padx=5)
+
+        self.continue_button = ttk.Button(
+            controls,
+            text="Продолжить и начать следующий период",
+            command=self.continue_manual_transition,
+            state=tk.DISABLED,
+        )
+        self.continue_button.grid(row=1, column=0, columnspan=4, pady=(12, 0))
 
         if DATA_DIR_WARNING:
             self.root.after(300, lambda: messagebox.showwarning("Portable-режим", DATA_DIR_WARNING))
@@ -116,20 +130,27 @@ class MainWindow:
 
     def start(self) -> None:
         """Запускает отсчет времени."""
-        self.timer.start()
+        if not self.timer.start():
+            self._refresh_labels()
+            return
         self.start_button.config(state=tk.DISABLED)
         self.pause_button.config(state=tk.NORMAL, text="Пауза")
         self._refresh_labels()
 
     def toggle_pause(self) -> None:
         """Ставит таймер на паузу или продолжает отсчет."""
-        self.timer.toggle_pause()
+        if not self.timer.toggle_pause():
+            self._refresh_labels()
+            return
         self._sync_timer_buttons()
         self._refresh_labels()
 
     def skip_period(self) -> None:
         """Пропускает текущий период Pomodoro."""
         skipped_mode = self.timer.skip_period()
+        if skipped_mode is None:
+            self._refresh_labels()
+            return
         self.statistics.record_skipped_period(skipped_mode)
         self.stats_view.refresh()
         self._refresh_labels()
@@ -152,7 +173,7 @@ class MainWindow:
         self.timer.update_settings(settings)
         self.notifications.update_settings(settings)
         self.widget_window.apply_settings(settings)
-        if should_reset_timer:
+        if should_reset_timer and not self.timer.state.waiting_for_continue:
             self.timer.reset()
             self.start_button.config(state=tk.NORMAL)
             self.pause_button.config(state=tk.DISABLED, text="Пауза")
@@ -160,9 +181,11 @@ class MainWindow:
 
     def reset(self) -> None:
         """Сбрасывает таймер и обновляет подписи в окне."""
+        if not self.timer.reset():
+            self._refresh_labels()
+            return
         self.statistics.record_reset()
         self.stats_view.refresh()
-        self.timer.reset()
         self.start_button.config(state=tk.NORMAL)
         self.pause_button.config(state=tk.DISABLED, text="Пауза")
         self._refresh_labels()
@@ -186,11 +209,21 @@ class MainWindow:
 
     def exit_app(self) -> None:
         """Полностью завершает приложение и убирает иконку трея."""
+        overrun = self.timer.finalize_overrun_on_exit()
+        if overrun is not None:
+            self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
+        self.notifications.dismiss()
         self.tray.stop()
         self.root.destroy()
 
     def toggle_timer_from_tray(self) -> None:
         """Запускает или ставит таймер на паузу из меню трея."""
+        if self.timer.state.waiting_for_continue:
+            # Во время превышения команда трея не должна незаметно остановить
+            # подсчет. Главное окно содержит явную кнопку продолжения.
+            self.show_window()
+            self._refresh_labels()
+            return
         if self.timer.state.is_running:
             self.timer.pause()
         else:
@@ -206,10 +239,20 @@ class MainWindow:
         self._refresh_labels()
 
     def continue_after_notification(self) -> None:
-        """Запускает следующий период из кнопки уведомления в ручном режиме."""
-        self.timer.start()
-        self.start_button.config(state=tk.DISABLED)
-        self.pause_button.config(state=tk.NORMAL, text="Пауза")
+        """Продолжает таймер через общий обработчик кнопок уведомления и окна."""
+        self.continue_manual_transition()
+
+    def continue_manual_transition(self) -> None:
+        """Один раз сохраняет превышение и запускает ожидающий период."""
+        overrun = self.timer.continue_to_next_period()
+        if overrun is None:
+            self._refresh_labels()
+            return
+
+        self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
+        self.notifications.dismiss()
+        self.stats_view.refresh()
+        self._sync_timer_buttons()
         self._refresh_labels()
 
     def _schedule_tick(self) -> None:
@@ -221,10 +264,9 @@ class MainWindow:
                 completed_period.duration_seconds,
                 self.settings.use_long_break,
             )
-            next_mode = self.timer.state.mode
             self.notifications.notify_period_finished(
                 completed_period.mode,
-                next_mode,
+                completed_period.next_mode,
                 self.continue_after_notification,
             )
             self.stats_view.refresh()
@@ -237,6 +279,20 @@ class MainWindow:
         self.time_label.config(text=self.timer.formatted_time())
         self.widget_window.update()
 
+        if self.timer.state.waiting_for_continue:
+            self.status_label.config(
+                text="Период завершен — превышение считается до продолжения",
+            )
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.DISABLED, text="Пауза")
+            self.skip_button.config(state=tk.DISABLED)
+            self.reset_button.config(state=tk.DISABLED)
+            self.continue_button.config(state=tk.NORMAL)
+            return
+
+        self.skip_button.config(state=tk.NORMAL)
+        self.reset_button.config(state=tk.NORMAL)
+        self.continue_button.config(state=tk.DISABLED)
         if self.timer.state.is_running:
             self.status_label.config(text="Таймер запущен")
             self.pause_button.config(text="Пауза")
@@ -249,6 +305,17 @@ class MainWindow:
 
     def _sync_timer_buttons(self) -> None:
         """Синхронизирует кнопки после команд из трея."""
+        if self.timer.state.waiting_for_continue:
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.DISABLED, text="Пауза")
+            self.skip_button.config(state=tk.DISABLED)
+            self.reset_button.config(state=tk.DISABLED)
+            self.continue_button.config(state=tk.NORMAL)
+            return
+
+        self.skip_button.config(state=tk.NORMAL)
+        self.reset_button.config(state=tk.NORMAL)
+        self.continue_button.config(state=tk.DISABLED)
         if self.timer.state.is_running:
             self.start_button.config(state=tk.DISABLED)
             self.pause_button.config(state=tk.NORMAL, text="Пауза")

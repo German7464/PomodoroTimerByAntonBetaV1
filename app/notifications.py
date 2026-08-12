@@ -19,6 +19,7 @@ class NotificationService:
         """Запоминает главное окно, чтобы показывать уведомления поверх него."""
         self.parent = parent
         self.settings = settings
+        self._active_window: tk.Toplevel | None = None
 
     def update_settings(self, settings: AppSettings) -> None:
         """Применяет новые настройки уведомлений."""
@@ -49,6 +50,11 @@ class NotificationService:
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         else:
             self.parent.bell()
+
+    def dismiss(self) -> None:
+        """Закрывает активное уведомление, не продолжая таймер автоматически."""
+        if self._active_window is not None:
+            self._destroy_popup(self._active_window)
 
     def _build_message(self, completed_mode: TimerMode, next_mode: TimerMode) -> str:
         """Собирает понятный текст уведомления с учетом режима перехода."""
@@ -83,7 +89,9 @@ class NotificationService:
         command: Callable[[], None] | None,
     ) -> None:
         """Создает аккуратное окно уведомления с одной главной кнопкой."""
+        self.dismiss()
         window = tk.Toplevel(self.parent)
+        self._active_window = window
         window.title("Pomodoro Timer")
         window.resizable(False, False)
         window.transient(self.parent)
@@ -95,12 +103,24 @@ class NotificationService:
         ttk.Label(frame, text=message, wraplength=360, justify=tk.LEFT).pack(pady=(0, 12))
 
         def handle_button() -> None:
-            # В ручном режиме кнопка запускает уже подготовленный следующий период.
+            # В ручном режиме callback выполняет единый переход и запись
+            # статистики. Закрытие крестиком этот callback не вызывает.
             if command is not None:
                 command()
-            window.destroy()
+            self._destroy_popup(window)
 
         ttk.Button(frame, text=button_text, command=handle_button).pack(anchor=tk.E)
+        window.protocol("WM_DELETE_WINDOW", lambda: self._destroy_popup(window))
 
         if self.settings.auto_start_next_period:
-            window.after(10000, window.destroy)
+            window.after(10000, lambda: self._destroy_popup(window))
+
+    def _destroy_popup(self, window: tk.Toplevel) -> None:
+        """Безопасно уничтожает окно и очищает ссылку на него."""
+        try:
+            if window.winfo_exists():
+                window.destroy()
+        except tk.TclError:
+            pass
+        if self._active_window is window:
+            self._active_window = None

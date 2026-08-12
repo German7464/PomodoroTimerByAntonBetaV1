@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
+import shutil
 from typing import Any
 
 from app.models import TimerMode
@@ -12,6 +13,9 @@ from app.models import TimerMode
 STAT_KEYS = (
     "work_seconds",
     "rest_seconds",
+    "overwork_seconds",
+    "short_break_overrun_seconds",
+    "long_break_overrun_seconds",
     "completed_work_periods",
     "completed_short_breaks",
     "completed_long_breaks",
@@ -29,7 +33,7 @@ def empty_stats_block() -> dict[str, int]:
 def default_statistics_data() -> dict[str, Any]:
     """Создает структуру statistics.json по умолчанию."""
     return {
-        "version": 1,
+        "version": 2,
         "days": {},
         "all_time": empty_stats_block(),
     }
@@ -74,6 +78,21 @@ class StatisticsService:
         _ = mode
         self._increment_counter("skipped_periods")
 
+    def record_overrun(self, mode: TimerMode, duration_seconds: int) -> None:
+        """Записывает одно завершенное превышение отдельно от обычного времени."""
+        if duration_seconds <= 0:
+            return
+
+        key_by_mode = {
+            TimerMode.WORK: "overwork_seconds",
+            TimerMode.SHORT_BREAK: "short_break_overrun_seconds",
+            TimerMode.LONG_BREAK: "long_break_overrun_seconds",
+        }
+        key = key_by_mode[mode]
+        self._today_stats()[key] += duration_seconds
+        self.data["all_time"][key] += duration_seconds
+        self._save()
+
     def record_reset(self) -> None:
         """Записывает нажатие кнопки сброса таймера."""
         self._increment_counter("timer_resets")
@@ -109,17 +128,24 @@ class StatisticsService:
     def _load_or_create(self) -> dict[str, Any]:
         """Читает JSON и восстанавливает структуру, если файл поврежден."""
         data = default_statistics_data()
+        should_save = not self.path.exists()
 
         if self.path.exists():
             try:
                 with self.path.open("r", encoding="utf-8") as file:
                     loaded_data = json.load(file)
+                if self._requires_recovery_backup(loaded_data):
+                    self._backup_corrupt_file()
                 data = self._normalize_data(loaded_data)
+                should_save = data != loaded_data
             except (json.JSONDecodeError, OSError):
+                self._backup_corrupt_file()
                 data = default_statistics_data()
+                should_save = True
 
         self.data = data
-        self._save()
+        if should_save:
+            self._save()
         return data
 
     def _normalize_data(self, raw_data: Any) -> dict[str, Any]:
@@ -127,11 +153,18 @@ class StatisticsService:
         if not isinstance(raw_data, dict):
             return default_statistics_data()
 
-        normalized = default_statistics_data()
-        normalized["version"] = raw_data.get("version", 1)
+        # Неизвестные поля сохраняются: будущая или сторонняя версия файла не
+        # должна терять данные только из-за запуска этой версии приложения.
+        normalized = deepcopy(raw_data)
+        try:
+            normalized["version"] = max(2, int(raw_data.get("version", 1)))
+        except (TypeError, ValueError):
+            normalized["version"] = 2
+        normalized["all_time"] = empty_stats_block()
+        normalized["days"] = {}
 
         if isinstance(raw_data.get("all_time"), dict):
-            normalized["all_time"].update(self._normalize_stats_block(raw_data["all_time"]))
+            normalized["all_time"] = self._normalize_stats_block(raw_data["all_time"])
 
         if isinstance(raw_data.get("days"), dict):
             for day_key, day_stats in raw_data["days"].items():
@@ -140,9 +173,9 @@ class StatisticsService:
 
         return normalized
 
-    def _normalize_stats_block(self, raw_stats: dict[str, Any]) -> dict[str, int]:
+    def _normalize_stats_block(self, raw_stats: dict[str, Any]) -> dict[str, Any]:
         """Приводит один блок счетчиков к ожидаемому набору чисел."""
-        stats = empty_stats_block()
+        stats = deepcopy(raw_stats)
         for key in STAT_KEYS:
             try:
                 stats[key] = max(0, int(raw_stats.get(key, 0)))
@@ -150,8 +183,46 @@ class StatisticsService:
                 stats[key] = 0
         return stats
 
+    def _requires_recovery_backup(self, raw_data: Any) -> bool:
+        """Проверяет, потеряет ли нормализация структурно неверные фрагменты."""
+        if not isinstance(raw_data, dict):
+            return True
+        if "all_time" in raw_data and not isinstance(raw_data["all_time"], dict):
+            return True
+        if "days" in raw_data and not isinstance(raw_data["days"], dict):
+            return True
+        if isinstance(raw_data.get("days"), dict):
+            return any(not isinstance(block, dict) for block in raw_data["days"].values())
+        return False
+
+    def _backup_corrupt_file(self) -> None:
+        """Сохраняет копию нечитаемого JSON перед восстановлением структуры."""
+        if not self.path.exists():
+            return
+
+        backup_path = self.path.with_name(f"{self.path.name}.corrupt.bak")
+        counter = 1
+        while backup_path.exists():
+            backup_path = self.path.with_name(
+                f"{self.path.name}.corrupt.{counter}.bak",
+            )
+            counter += 1
+
+        try:
+            shutil.copy2(self.path, backup_path)
+        except OSError:
+            # Даже если резервная копия невозможна, приложение продолжает
+            # работать с безопасной структурой в памяти.
+            return
+
     def _save(self) -> None:
-        """Сохраняет статистику в пользовательскую папку."""
+        """Атомарно сохраняет статистику в пользовательскую папку."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as file:
-            json.dump(self.data, file, ensure_ascii=False, indent=2)
+        temporary_path = self.path.with_name(f"{self.path.name}.tmp")
+        try:
+            with temporary_path.open("w", encoding="utf-8") as file:
+                json.dump(self.data, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+            temporary_path.replace(self.path)
+        finally:
+            temporary_path.unlink(missing_ok=True)

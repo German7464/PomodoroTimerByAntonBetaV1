@@ -1,0 +1,116 @@
+# Карта проекта PomodoroTimerByAnton
+
+## Назначение и запуск
+
+PomodoroTimerByAnton — локальное настольное приложение на Python/Tkinter для чередования работы, короткого и длинного отдыха. Оно показывает общий таймер в главном окне и плавающем виджете, отправляет Tkinter-уведомления, ведет статистику, поддерживает профили, системный трей и автозапуск Windows.
+
+Точка входа — `main.py`. Функция `main()` создает `app.ui.main_window.MainWindow` и вызывает `run()`. `MainWindow.run()` запускает трей, секундный цикл `Tk.after()` и `mainloop()`.
+
+## Структура
+
+```text
+main.py                         точка входа
+app/
+  models.py                     перечисления и dataclass-модели
+  timer_engine.py               независимая от Tkinter логика таймера
+  statistics.py                 статистика и statistics.json v2
+  notifications.py              окна завершения периода
+  storage.py                    загрузка/нормализация настроек JSON
+  config.py                     пути, portable-режим и миграция данных
+  profiles.py                   профили настроек
+  autostart.py                  автозапуск через HKCU Run
+  ui/
+    main_window.py              композиция сервисов и обработчики действий
+    widget_window.py            плавающий виджет общего TimerEngine
+    stats_view.py               статистика за сегодня/все время
+    settings_window.py          настройки и профили
+    help_window.py              встроенная пользовательская справка
+    tray.py                     pystray-меню и поток иконки
+tests/                          unittest-тесты ядра, данных и UI-контрактов
+docs/
+  PROJECT_MAP.md                эта карта
+  TIMER_STATE_MACHINE.md        состояния, переходы и точки записи
+data/                           локальные пользовательские JSON
+PomodoroTimerByAnton.spec       конфигурация PyInstaller onedir
+requirements.txt                pystray, Pillow, PyInstaller
+README.md                       пользовательская документация
+CHANGELOG.md                    история изменений
+```
+
+## Основные связи
+
+`MainWindow` создает ровно один `TimerEngine`. Главное окно и `WidgetWindow` читают из него `mode_name()` и `formatted_time()`, поэтому отдельного таймера в виджете нет.
+
+Обычный секундный поток:
+
+```text
+Tk.after → MainWindow._schedule_tick() → TimerEngine.tick()
+                                      ├→ UI + WidgetWindow.update()
+                                      └→ PeriodCompletion
+                                           ├→ StatisticsService.record_completed_period()
+                                           └→ NotificationService.notify_period_finished()
+```
+
+При автоматическом переходе `TimerEngine` сразу выбирает и запускает следующий режим. При ручном переходе он сохраняет завершенный режим, считает превышение и ожидает. Кнопка уведомления и кнопка главного окна вызывают один `MainWindow.continue_manual_transition()`: ядро атомарно забирает превышение и запускает следующий период, статистика записывает соответствующее поле, уведомление закрывается, обе части UI и статистика обновляются. Крестик уведомления закрывает только окно.
+
+`config.py` выбирает каталог данных. `storage.py`, `profiles.py` и `statistics.py` отвечают за конкретные JSON. `SettingsView` возвращает новый `AppSettings` в `MainWindow.apply_settings()`, после чего настройки получают таймер, уведомления и виджет.
+
+## Пользовательские данные и JSON
+
+При запуске из Python файлы находятся в `<корень>/data/`. В PyInstaller onedir-сборке — в `data/` рядом с exe. Если этот каталог недоступен для записи, используется `%USERPROFILE%\.pomodoro_timer_by_anton\`. При первом доступном portable-запуске старые JSON из fallback-каталога копируются, но не удаляются.
+
+- `settings.json` — объект без поля версии, соответствующий `AppSettings`. `storage.normalize_settings_data()` добавляет отсутствующие поля, проверяет длительности, формат времени, координаты, прозрачность и цвета.
+- `profiles.json` — список объектов `TimerProfile`. `ProfilesService` отбрасывает элементы без имени, нормализует значения и гарантирует стандартный профиль.
+- `statistics.json` — объект версии 2:
+
+```json
+{
+  "version": 2,
+  "days": {
+    "YYYY-MM-DD": {
+      "work_seconds": 0,
+      "rest_seconds": 0,
+      "overwork_seconds": 0,
+      "short_break_overrun_seconds": 0,
+      "long_break_overrun_seconds": 0,
+      "completed_work_periods": 0,
+      "completed_short_breaks": 0,
+      "completed_long_breaks": 0,
+      "skipped_periods": 0,
+      "timer_resets": 0,
+      "completed_pomodoro_cycles": 0
+    }
+  },
+  "all_time": { "...": 0 }
+}
+```
+
+Версия 1 мигрирует автоматически: существующие известные и неизвестные поля сохраняются, три новых счетчика получают `0`, версия становится 2. Частично заполненные блоки дополняются; отрицательные и нечисловые известные значения заменяются безопасными. Нечитаемый JSON или JSON со структурно неверными блоками копируется в соседний `statistics.json.corrupt[.N].bak`, затем создается рабочая структура. Запись выполняется через временный файл и замену. Превышение не сохраняется каждый тик — только при «Продолжить» или штатном полном выходе.
+
+Файлы `data/settings.json`, `data/profiles.json`, `data/statistics.json` являются пользовательскими и перечислены в корневом `.gitignore`.
+
+## Зависимости и команды
+
+Проверенная версия в текущем окружении: Python 3.14.7 с Tcl/Tk 9.0. Tkinter и `winreg` входят в Windows Python. Внешние зависимости: `pystray`, `Pillow`, `PyInstaller>=6.22,<7`. Минимум PyInstaller 6.22 нужен для сборки Tcl/Tk 9 со встроенным архивом данных (`//zipfs:/...`); версия 6.20 создает exe без Tkinter и не подходит.
+
+```powershell
+python -m pip install -r requirements.txt
+python main.py
+python -m unittest discover -s tests -v
+python -m compileall -q main.py app tests
+python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
+```
+
+Сборка в README также показана эквивалентной командой `--onedir --windowed`. Перед выпуском предпочтительно использовать отслеживаемый `.spec`.
+
+## Автоматически созданное и ограничения
+
+`.venv/`, `.idea/`, `build/`, `dist/`, `__pycache__/`, `*.pyc` и `.pytest_cache/` не являются исходным кодом и игнорируются для новых изменений. В старом базовом коммите часть этих файлов уже отслеживалась; не удаляйте и не переписывайте историю без отдельного решения владельца.
+
+Известные ограничения:
+
+- трей и автозапуск ориентированы на Windows; автозапуск включается только в exe;
+- точность тиков зависит от событийного цикла Tkinter и не компенсирует сон/долгую блокировку процесса монотонными часами;
+- превышение хранится в памяти до «Продолжить» или штатного полного выхода; аварийное завершение процесса может потерять незаписанную часть;
+- превышение целиком относится к дню, в который оно сохранено, даже если ожидание пересекло полночь;
+- автоматического GUI/E2E-теста реального трея и окон нет; UI-контракты проверяются без создания Tk root.

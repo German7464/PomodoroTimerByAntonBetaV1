@@ -136,7 +136,11 @@ class SettingsView(ttk.Frame):
         ttk.Checkbutton(parent, text="Автоматически переходить к следующему периоду", variable=self.auto_start_next_period_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=6)
         ttk.Label(
             parent,
-            text="Если автопереход включен, уведомление покажет кнопку «Закрыть».\nЕсли автопереход выключен, уведомление покажет кнопку «Продолжить».",
+            text=(
+                "Автопереход сразу запускает следующий период без учета превышения.\n"
+                "Ручной переход считает превышение до кнопки «Продолжить» "
+                "в уведомлении или главном окне."
+            ),
         ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(4, 12))
         self._add_entry(parent, "Конец работы:", self.work_end_message_var, 4, width=48)
         self._add_entry(parent, "Конец короткого отдыха:", self.short_break_end_message_var, 5, width=48)

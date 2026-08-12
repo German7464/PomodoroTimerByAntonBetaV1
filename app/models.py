@@ -87,11 +87,24 @@ class TimerState:
     remaining_seconds: int
     is_running: bool = False
     completed_work_periods: int = 0
+    waiting_for_continue: bool = False
+    overrun_seconds: int = 0
+    overrun_mode: TimerMode | None = None
+    next_mode: TimerMode | None = None
 
 
 @dataclass
 class PeriodCompletion:
     """Информация о периоде, который дошел до конца без пропуска."""
+
+    mode: TimerMode
+    duration_seconds: int
+    next_mode: TimerMode
+
+
+@dataclass
+class OverrunCompletion:
+    """Превышение завершенного периода, зафиксированное одним действием."""
 
     mode: TimerMode
     duration_seconds: int

@@ -69,6 +69,9 @@ class StatsView(ttk.Frame):
         rows = [
             ("work_seconds", "Время работы"),
             ("rest_seconds", "Время отдыха"),
+            ("overwork_seconds", "Время переработки"),
+            ("short_break_overrun_seconds", "Короткий отдых сверх нормы"),
+            ("long_break_overrun_seconds", "Длинный отдых сверх нормы"),
             ("completed_work_periods", "Рабочих периодов завершено"),
             ("completed_short_breaks", "Коротких отдыхов завершено"),
             ("completed_long_breaks", "Длинных отдыхов завершено"),

@@ -1,0 +1,20 @@
+.venv/
+.idea/
+build/
+dist/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+*.tmp
+*.temp
+*.bak
+*~
+.DS_Store
+
+# Локальные пользовательские данные приложения.
+data/settings.json
+data/profiles.json
+data/statistics.json
