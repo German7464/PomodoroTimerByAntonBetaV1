@@ -1,5 +1,6 @@
 """Настройки таймера, уведомлений, виджета, профилей, трея и автозапуска."""
 
+from copy import deepcopy
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable
@@ -12,6 +13,14 @@ from app.autostart import (
 from app.config import DEFAULT_PROFILE_NAME, PROFILES_FILE, is_frozen_app
 from app.models import AppSettings, TimeDisplayFormat
 from app.profiles import ProfilesService
+from app.widget_settings import (
+    DEFAULT_WIDGET_X,
+    DEFAULT_WIDGET_Y,
+    WIDGET_SIZES,
+    WIDGET_TYPES,
+    normalize_widget_layouts,
+    set_widget_layout_size,
+)
 
 
 class SettingsView(ttk.Frame):
@@ -50,6 +59,8 @@ class SettingsView(ttk.Frame):
         self.long_break_end_message_var = tk.StringVar(value=settings.long_break_end_message)
         self.widget_enabled_var = tk.BooleanVar(value=settings.widget_enabled)
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
+        self.widget_size_var = tk.StringVar(value=settings.widget_size)
+        self.widget_layouts = deepcopy(settings.widget_layouts)
         self.widget_background_color_var = tk.StringVar(value=settings.widget_background_color)
         self.widget_text_color_var = tk.StringVar(value=settings.widget_text_color)
         self.widget_opacity_var = tk.IntVar(value=settings.widget_opacity)
@@ -150,14 +161,39 @@ class SettingsView(ttk.Frame):
         """Группа настроек плавающего виджета."""
         ttk.Checkbutton(parent, text="Виджет включен", variable=self.widget_enabled_var).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
         ttk.Label(parent, text="Тип виджета:").grid(row=1, column=0, sticky=tk.W, pady=6)
-        ttk.Combobox(parent, values=["Компактный"], textvariable=self.widget_type_var, state="readonly", width=14).grid(row=1, column=1, sticky=tk.W, pady=6)
-        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 2, width=12)
-        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 3, width=12)
-        ttk.Label(parent, text="Прозрачность, %:").grid(row=4, column=0, sticky=tk.W, pady=6)
-        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=4, column=1, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Button(parent, text="Сбросить позицию виджета", command=self._reset_widget_position).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
-        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        type_box = ttk.Combobox(
+            parent,
+            values=WIDGET_TYPES,
+            textvariable=self.widget_type_var,
+            state="readonly",
+            width=18,
+        )
+        type_box.grid(row=1, column=1, sticky=tk.W, pady=6)
+        type_box.bind("<<ComboboxSelected>>", self._on_widget_type_selected)
+        ttk.Label(parent, text="Размер виджета:").grid(row=2, column=0, sticky=tk.W, pady=6)
+        size_box = ttk.Combobox(
+            parent,
+            values=WIDGET_SIZES,
+            textvariable=self.widget_size_var,
+            state="readonly",
+            width=18,
+        )
+        size_box.grid(row=2, column=1, sticky=tk.W, pady=6)
+        size_box.bind("<<ComboboxSelected>>", self._on_widget_size_selected)
+        self._add_entry(parent, "Цвет фона:", self.widget_background_color_var, 3, width=12)
+        self._add_entry(parent, "Цвет текста:", self.widget_text_color_var, 4, width=12)
+        ttk.Label(parent, text="Прозрачность, %:").grid(row=5, column=0, sticky=tk.W, pady=6)
+        ttk.Scale(parent, from_=20, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=5, column=1, sticky=tk.W, pady=6)
+        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        ttk.Label(
+            parent,
+            text=(
+                "После сохранения вид меняется без перезапуска и сброса таймера.\n"
+                "Ручное изменение окна автоматически выбирает размер «Пользовательский»."
+            ),
+        ).grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ttk.Label(parent, text="Цвета указываются в формате #RRGGBB, например #202124.").grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
 
     def _build_profiles_settings(self, parent: ttk.Frame) -> None:
         """Группа управления профилями."""
@@ -202,6 +238,15 @@ class SettingsView(ttk.Frame):
         if self.autostart_status_label is not None:
             self.autostart_status_label.config(text=self._autostart_status_text())
         self._sync_autostart_controls()
+
+    def sync_widget_layouts(self, settings: AppSettings) -> None:
+        """Принимает отложенно сохраненный ручной размер активного виджета."""
+        widget_type = settings.widget_type
+        self.widget_layouts[widget_type] = deepcopy(
+            settings.widget_layouts[widget_type],
+        )
+        if self.widget_type_var.get() == widget_type:
+            self.widget_size_var.set(settings.widget_size)
 
     def _autostart_status_text(self) -> str:
         """Возвращает понятное описание текущего состояния автозапуска."""
@@ -323,6 +368,9 @@ class SettingsView(ttk.Frame):
 
     def _settings_from_form(self, active_profile: str) -> AppSettings:
         """Собирает объект настроек из значений формы."""
+        self._remember_widget_size_selection()
+        widget_type = self.widget_type_var.get()
+        active_layout = self.widget_layouts[widget_type]
         return AppSettings(
             active_profile=active_profile or self.settings.active_profile,
             work_minutes=self._positive_int(self.work_minutes_var, self.settings.work_minutes),
@@ -341,13 +389,15 @@ class SettingsView(ttk.Frame):
             minimize_to_tray_on_start=self.minimize_to_tray_on_start_var.get(),
             close_to_tray=self.close_to_tray_var.get(),
             widget_enabled=self.widget_enabled_var.get(),
-            widget_type=self.widget_type_var.get(),
+            widget_type=widget_type,
+            widget_size=self.widget_size_var.get(),
+            widget_layouts=deepcopy(self.widget_layouts),
             widget_background_color=self._safe_color(self.widget_background_color_var.get(), self.settings.widget_background_color),
             widget_text_color=self._safe_color(self.widget_text_color_var.get(), self.settings.widget_text_color),
             widget_opacity=self._bounded_opacity(),
             widget_always_on_top=self.widget_always_on_top_var.get(),
-            widget_x=self.settings.widget_x,
-            widget_y=self.settings.widget_y,
+            widget_x=int(active_layout["x"]),
+            widget_y=int(active_layout["y"]),
         )
 
     def _load_settings_to_form(self, settings: AppSettings) -> None:
@@ -370,6 +420,8 @@ class SettingsView(ttk.Frame):
         self.long_break_end_message_var.set(settings.long_break_end_message)
         self.widget_enabled_var.set(settings.widget_enabled)
         self.widget_type_var.set(settings.widget_type)
+        self.widget_size_var.set(settings.widget_size)
+        self.widget_layouts = deepcopy(settings.widget_layouts)
         self.widget_background_color_var.set(settings.widget_background_color)
         self.widget_text_color_var.set(settings.widget_text_color)
         self.widget_opacity_var.set(settings.widget_opacity)
@@ -377,10 +429,35 @@ class SettingsView(ttk.Frame):
         self._update_long_break_controls()
 
     def _reset_widget_position(self) -> None:
-        """Возвращает виджет в левую верхнюю область экрана."""
-        self.settings.widget_x = 100
-        self.settings.widget_y = 100
-        messagebox.showinfo("Виджет", "Позиция виджета будет сброшена после сохранения.")
+        """Возвращает текущий тип виджета в безопасную область экрана."""
+        widget_type = self.widget_type_var.get()
+        self.widget_layouts[widget_type]["x"] = DEFAULT_WIDGET_X
+        self.widget_layouts[widget_type]["y"] = DEFAULT_WIDGET_Y
+        messagebox.showinfo(
+            "Виджет",
+            "Позиция выбранного типа будет сброшена после сохранения.",
+        )
+
+    def _on_widget_type_selected(self, _event: tk.Event) -> None:
+        """Восстанавливает сохраненный размер выбранного типа."""
+        widget_type = self.widget_type_var.get()
+        self.widget_size_var.set(str(self.widget_layouts[widget_type]["size"]))
+
+    def _on_widget_size_selected(self, _event: tk.Event) -> None:
+        """Запоминает пресет размера отдельно для текущего типа."""
+        self._remember_widget_size_selection()
+
+    def _remember_widget_size_selection(self) -> None:
+        """Обновляет локальную копию геометрий до сохранения формы."""
+        self.widget_layouts = normalize_widget_layouts(
+            self.widget_layouts,
+            active_type=self.widget_type_var.get(),
+        )
+        self.widget_layouts = set_widget_layout_size(
+            self.widget_layouts,
+            self.widget_type_var.get(),
+            self.widget_size_var.get(),
+        )
 
     def _selected_profile_name(self) -> str | None:
         """Возвращает имя профиля, выбранного в списке."""

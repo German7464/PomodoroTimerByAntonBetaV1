@@ -1,5 +1,6 @@
 """Работа с пользовательскими профилями настроек."""
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,15 @@ from app.config import (
 )
 from app.models import AppSettings, TimerProfile, TimeDisplayFormat
 from app.storage import load_json, save_json
+from app.widget_settings import (
+    DEFAULT_WIDGET_SIZE,
+    DEFAULT_WIDGET_TYPE,
+    default_widget_layouts,
+    normalize_widget_layouts,
+    normalize_widget_size,
+    normalize_widget_type,
+    set_widget_layout_size,
+)
 
 
 def default_profile() -> TimerProfile:
@@ -38,7 +48,9 @@ def default_profile() -> TimerProfile:
         minimize_to_tray_on_start=DEFAULT_MINIMIZE_TO_TRAY_ON_START,
         close_to_tray=True,
         widget_enabled=False,
-        widget_type="Компактный",
+        widget_type=DEFAULT_WIDGET_TYPE,
+        widget_size=DEFAULT_WIDGET_SIZE,
+        widget_layouts=default_widget_layouts(),
         widget_background_color="#202124",
         widget_text_color="#ffffff",
         widget_opacity=100,
@@ -89,6 +101,8 @@ class ProfilesService:
             close_to_tray=settings.close_to_tray,
             widget_enabled=settings.widget_enabled,
             widget_type=settings.widget_type,
+            widget_size=settings.widget_size,
+            widget_layouts=deepcopy(settings.widget_layouts),
             widget_background_color=settings.widget_background_color,
             widget_text_color=settings.widget_text_color,
             widget_opacity=settings.widget_opacity,
@@ -135,6 +149,8 @@ class ProfilesService:
             close_to_tray=profile.close_to_tray,
             widget_enabled=profile.widget_enabled,
             widget_type=profile.widget_type,
+            widget_size=profile.widget_size,
+            widget_layouts=deepcopy(profile.widget_layouts),
             widget_background_color=profile.widget_background_color,
             widget_text_color=profile.widget_text_color,
             widget_opacity=profile.widget_opacity,
@@ -192,7 +208,22 @@ class ProfilesService:
         normalized["close_to_tray"] = bool(normalized["close_to_tray"])
         normalized["widget_enabled"] = bool(normalized["widget_enabled"])
         normalized["widget_always_on_top"] = bool(normalized["widget_always_on_top"])
-        normalized["widget_type"] = str(normalized["widget_type"] or "Компактный")
+        normalized["widget_type"] = normalize_widget_type(normalized.get("widget_type"))
+        normalized["widget_layouts"] = normalize_widget_layouts(
+            normalized.get("widget_layouts"),
+            legacy_x=normalized.get("widget_x", 100),
+            legacy_y=normalized.get("widget_y", 100),
+            active_type=normalized["widget_type"],
+        )
+        active_layout = normalized["widget_layouts"][normalized["widget_type"]]
+        normalized["widget_size"] = normalize_widget_size(
+            normalized.get("widget_size", active_layout["size"]),
+        )
+        normalized["widget_layouts"] = set_widget_layout_size(
+            normalized["widget_layouts"],
+            normalized["widget_type"],
+            normalized["widget_size"],
+        )
         normalized["widget_background_color"] = self._safe_color(
             normalized["widget_background_color"],
             "#202124",
@@ -212,15 +243,21 @@ class ProfilesService:
         ):
             message = str(normalized.get(key, "")).strip()
             normalized[key] = message or default_value
-        normalized["widget_x"] = self._non_negative_int(normalized.get("widget_x"), 100)
-        normalized["widget_y"] = self._non_negative_int(normalized.get("widget_y"), 100)
+        active_layout = normalized["widget_layouts"][normalized["widget_type"]]
+        normalized["widget_x"] = int(active_layout["x"])
+        normalized["widget_y"] = int(active_layout["y"])
 
         allowed_formats = {format_item.value for format_item in TimeDisplayFormat}
         if normalized["time_display_format"] not in allowed_formats:
             normalized["time_display_format"] = DEFAULT_TIME_DISPLAY_FORMAT
 
         normalized.pop("cycles_before_long_break", None)
-        return TimerProfile(**normalized)
+        known_profile = {
+            key: value
+            for key, value in normalized.items()
+            if key in TimerProfile.__dataclass_fields__
+        }
+        return TimerProfile(**known_profile)
 
     def _ensure_default_profile(self) -> None:
         """Гарантирует, что стандартный профиль всегда есть в списке."""

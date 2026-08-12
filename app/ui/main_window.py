@@ -15,7 +15,7 @@ from app.ui.help_window import HelpView
 from app.ui.settings_window import SettingsView
 from app.ui.stats_view import StatsView
 from app.ui.tray import TrayController
-from app.ui.widget_window import WidgetWindow
+from app.ui.widget_window import WidgetActions, WidgetWindow
 
 
 class MainWindow:
@@ -33,7 +33,20 @@ class MainWindow:
         self.timer = TimerEngine(self.settings)
         self.statistics = StatisticsService(STATISTICS_FILE)
         self.notifications = NotificationService(self.root, self.settings)
-        self.widget_window = WidgetWindow(self.root, self.timer, self.settings)
+        self.widget_window = WidgetWindow(
+            self.root,
+            self.timer,
+            self.settings,
+            actions=WidgetActions(
+                toggle_timer=self.toggle_timer_from_tray,
+                continue_period=self.continue_manual_transition,
+                skip_period=self.skip_period,
+                reset_timer=self.reset,
+                show_main_window=self.show_window,
+            ),
+            save_settings=lambda settings: save_app_settings(SETTINGS_FILE, settings),
+            on_layout_changed=self._on_widget_layout_changed,
+        )
 
         self.tray = TrayController(
             show_window=self._schedule(self.show_window),
@@ -169,10 +182,10 @@ class MainWindow:
 
         self.settings_view.update_autostart_status(self.autostart.status())
         self.settings = settings
-        save_app_settings(SETTINGS_FILE, settings)
         self.timer.update_settings(settings)
         self.notifications.update_settings(settings)
         self.widget_window.apply_settings(settings)
+        save_app_settings(SETTINGS_FILE, settings)
         if should_reset_timer and not self.timer.state.waiting_for_continue:
             self.timer.reset()
             self.start_button.config(state=tk.NORMAL)
@@ -237,6 +250,12 @@ class MainWindow:
         save_app_settings(SETTINGS_FILE, self.settings)
         self.widget_window.apply_settings(self.settings)
         self._refresh_labels()
+
+    def _on_widget_layout_changed(self, settings: AppSettings) -> None:
+        """Синхронизирует ручной размер с уже открытой формой настроек."""
+        self.settings = settings
+        if hasattr(self, "settings_view"):
+            self.settings_view.sync_widget_layouts(settings)
 
     def continue_after_notification(self) -> None:
         """Продолжает таймер через общий обработчик кнопок уведомления и окна."""

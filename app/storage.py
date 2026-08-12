@@ -16,6 +16,14 @@ from app.config import (
     DEFAULT_WORK_MINUTES,
 )
 from app.models import AppSettings, TimeDisplayFormat
+from app.widget_settings import (
+    DEFAULT_WIDGET_SIZE,
+    DEFAULT_WIDGET_TYPE,
+    normalize_widget_layouts,
+    normalize_widget_size,
+    normalize_widget_type,
+    set_widget_layout_size,
+)
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -58,7 +66,9 @@ def default_settings_data() -> dict[str, Any]:
         "minimize_to_tray_on_start": DEFAULT_MINIMIZE_TO_TRAY_ON_START,
         "close_to_tray": True,
         "widget_enabled": False,
-        "widget_type": "Компактный",
+        "widget_type": DEFAULT_WIDGET_TYPE,
+        "widget_size": DEFAULT_WIDGET_SIZE,
+        "widget_layouts": normalize_widget_layouts(None),
         "widget_background_color": "#202124",
         "widget_text_color": "#ffffff",
         "widget_opacity": 100,
@@ -83,7 +93,25 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
     settings["close_to_tray"] = bool(settings["close_to_tray"])
     settings["widget_enabled"] = bool(settings["widget_enabled"])
     settings["widget_always_on_top"] = bool(settings["widget_always_on_top"])
-    settings["widget_type"] = str(settings["widget_type"] or "Компактный")
+    settings["widget_type"] = normalize_widget_type(settings.get("widget_type"))
+    raw_layouts = raw_data.get("widget_layouts")
+    settings["widget_layouts"] = normalize_widget_layouts(
+        raw_layouts,
+        legacy_x=raw_data.get("widget_x", 100),
+        legacy_y=raw_data.get("widget_y", 100),
+        active_type=settings["widget_type"],
+    )
+    active_layout = settings["widget_layouts"][settings["widget_type"]]
+    if "widget_size" in raw_data:
+        settings["widget_size"] = normalize_widget_size(raw_data.get("widget_size"))
+    else:
+        settings["widget_size"] = normalize_widget_size(active_layout.get("size"))
+    settings["widget_layouts"] = set_widget_layout_size(
+        settings["widget_layouts"],
+        settings["widget_type"],
+        settings["widget_size"],
+    )
+    active_layout = settings["widget_layouts"][settings["widget_type"]]
     settings["widget_background_color"] = _safe_color(settings["widget_background_color"], "#202124")
     settings["widget_text_color"] = _safe_color(settings["widget_text_color"], "#ffffff")
 
@@ -100,11 +128,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         settings["widget_opacity"] = 100
 
-    for key in ("widget_x", "widget_y"):
-        try:
-            settings[key] = max(0, int(settings[key]))
-        except (TypeError, ValueError):
-            settings[key] = 100
+    # Эти поля оставлены для обратной совместимости со старыми версиями.
+    settings["widget_x"] = int(active_layout["x"])
+    settings["widget_y"] = int(active_layout["y"])
 
     for key, default_value in (
         ("work_minutes", DEFAULT_WORK_MINUTES),
@@ -132,11 +158,30 @@ def load_app_settings(path: Path) -> AppSettings:
     """Загружает настройки приложения и мягко мигрирует старый формат."""
     settings_data = normalize_settings_data(load_json(path, default_settings_data()))
     save_json(path, settings_data)
-    return AppSettings(**settings_data)
+    known_settings = {
+        key: value
+        for key, value in settings_data.items()
+        if key in AppSettings.__dataclass_fields__
+    }
+    return AppSettings(**known_settings)
 
 
 def save_app_settings(path: Path, settings: AppSettings) -> None:
     """Сохраняет настройки приложения в settings.json."""
+    settings.widget_type = normalize_widget_type(settings.widget_type)
+    settings.widget_layouts = normalize_widget_layouts(
+        settings.widget_layouts,
+        legacy_x=settings.widget_x,
+        legacy_y=settings.widget_y,
+        active_type=settings.widget_type,
+    )
+    active_layout = settings.widget_layouts[settings.widget_type]
+    settings.widget_size = normalize_widget_size(
+        active_layout.get("size"),
+        normalize_widget_size(settings.widget_size),
+    )
+    settings.widget_x = int(active_layout["x"])
+    settings.widget_y = int(active_layout["y"])
     save_json(path, settings.__dict__)
 
 

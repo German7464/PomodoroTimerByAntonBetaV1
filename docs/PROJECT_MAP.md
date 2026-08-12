@@ -18,6 +18,7 @@ app/
   storage.py                    загрузка/нормализация настроек JSON
   config.py                     пути, portable-режим и миграция данных
   profiles.py                   профили настроек
+  widget_settings.py            пресеты и нормализация геометрий виджета
   autostart.py                  автозапуск через HKCU Run
   ui/
     main_window.py              композиция сервисов и обработчики действий
@@ -30,6 +31,7 @@ tests/                          unittest-тесты ядра, данных и UI
 docs/
   PROJECT_MAP.md                эта карта
   TIMER_STATE_MACHINE.md        состояния, переходы и точки записи
+  WIDGETS.md                    типы, размеры и хранение геометрии виджета
 data/                           локальные пользовательские JSON
 PomodoroTimerByAnton.spec       конфигурация PyInstaller onedir
 requirements.txt                pystray, Pillow, PyInstaller
@@ -39,7 +41,7 @@ CHANGELOG.md                    история изменений
 
 ## Основные связи
 
-`MainWindow` создает ровно один `TimerEngine`. Главное окно и `WidgetWindow` читают из него `mode_name()` и `formatted_time()`, поэтому отдельного таймера в виджете нет.
+`MainWindow` создает ровно один `TimerEngine`. Главное окно и три переключаемых представления одного `WidgetWindow` читают из него `mode_name()` и `formatted_time()`, поэтому отдельного таймера и дополнительного цикла обновления в виджете нет. Детали находятся в `docs/WIDGETS.md`.
 
 Обычный секундный поток:
 
@@ -59,7 +61,7 @@ Tk.after → MainWindow._schedule_tick() → TimerEngine.tick()
 
 При запуске из Python файлы находятся в `<корень>/data/`. В PyInstaller onedir-сборке — в `data/` рядом с exe. Если этот каталог недоступен для записи, используется `%USERPROFILE%\.pomodoro_timer_by_anton\`. При первом доступном portable-запуске старые JSON из fallback-каталога копируются, но не удаляются.
 
-- `settings.json` — объект без поля версии, соответствующий `AppSettings`. `storage.normalize_settings_data()` добавляет отсутствующие поля, проверяет длительности, формат времени, координаты, прозрачность и цвета.
+- `settings.json` — объект без поля версии, соответствующий `AppSettings`. `storage.normalize_settings_data()` добавляет отсутствующие поля, проверяет длительности, формат времени, прозрачность, цвета, тип/размер виджета и отдельные геометрии в `widget_layouts`. Старые `widget_x`/`widget_y` мигрируют в компактный вид и сохраняются для обратной совместимости.
 - `profiles.json` — список объектов `TimerProfile`. `ProfilesService` отбрасывает элементы без имени, нормализует значения и гарантирует стандартный профиль.
 - `statistics.json` — объект версии 2:
 

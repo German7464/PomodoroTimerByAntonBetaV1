@@ -10,6 +10,7 @@ from app.statistics import StatisticsService
 from app.timer_engine import TimerEngine
 from app.ui.main_window import MainWindow
 from app.ui.widget_window import WidgetWindow
+from app.ui.widget_window import WidgetActions, WidgetView
 from tests.test_timer_engine import finish_current_period, make_settings
 
 
@@ -69,6 +70,16 @@ class CounterObject:
 
     def destroy(self) -> None:
         self.calls += 1
+
+
+class FakeButton:
+    """Кнопка, вызывающая сохраненную команду без Tk."""
+
+    def __init__(self, command) -> None:
+        self.command = command
+
+    def invoke(self) -> None:
+        self.command()
 
 
 def prepare_main_window(timer: TimerEngine, statistics: StatisticsService) -> MainWindow:
@@ -197,13 +208,38 @@ class UiContractTests(unittest.TestCase):
         widget.settings = make_settings()
         widget.settings.widget_enabled = True
         widget.window = object()
-        widget.mode_label = FakeWidget()
-        widget.time_label = FakeWidget()
+        widget.view = FakeWidgetWindow(timer)
 
         widget.update()
 
-        self.assertEqual(widget.mode_label.values["text"], timer.mode_name())
-        self.assertEqual(widget.time_label.values["text"], timer.formatted_time())
+        self.assertEqual(widget.view.mode, timer.mode_name())
+        self.assertEqual(widget.view.time, timer.formatted_time())
+
+    def test_widget_continue_uses_main_window_common_handler(self) -> None:
+        with TemporaryDirectory() as directory:
+            timer = TimerEngine(make_settings())
+            finish_current_period(timer)
+            timer.tick()
+            statistics = StatisticsService(Path(directory) / "statistics.json")
+            window = prepare_main_window(timer, statistics)
+            actions = WidgetActions(
+                toggle_timer=lambda: None,
+                continue_period=window.continue_manual_transition,
+                skip_period=lambda: None,
+                reset_timer=lambda: None,
+                show_main_window=lambda: None,
+            )
+            view = WidgetView.__new__(WidgetView)
+            view.timer = timer
+            view.actions = actions
+            continue_button = FakeButton(view._handle_primary)
+
+            continue_button.invoke()
+            continue_button.invoke()
+
+            self.assertEqual(statistics.all_time_stats()["overwork_seconds"], 1)
+            self.assertFalse(timer.state.waiting_for_continue)
+            self.assertEqual(window.notifications.calls, 1)
 
 
 if __name__ == "__main__":

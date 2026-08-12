@@ -1,6 +1,6 @@
 """Модели данных, которые используются в приложении."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -41,6 +41,8 @@ class TimerProfile:
     close_to_tray: bool = True
     widget_enabled: bool = False
     widget_type: str = "Компактный"
+    widget_size: str = "Маленький"
+    widget_layouts: dict[str, dict[str, int | str]] = field(default_factory=dict)
     widget_background_color: str = "#202124"
     widget_text_color: str = "#ffffff"
     widget_opacity: int = 100
@@ -71,6 +73,8 @@ class AppSettings:
     close_to_tray: bool = True
     widget_enabled: bool = False
     widget_type: str = "Компактный"
+    widget_size: str = "Маленький"
+    widget_layouts: dict[str, dict[str, int | str]] = field(default_factory=dict)
     widget_background_color: str = "#202124"
     widget_text_color: str = "#ffffff"
     widget_opacity: int = 100
