@@ -39,6 +39,7 @@ from app.theme import (
     normalize_theme_name,
 )
 from app.ui.theme_editor import CustomThemeEditor
+from app.ui.toggle_switch import ToggleSwitch
 from app.widget_settings import (
     DEFAULT_WIDGET_X,
     DEFAULT_WIDGET_Y,
@@ -82,6 +83,13 @@ class SettingsView(ttk.Frame):
         self.on_widget_opacity_change = on_widget_opacity_change
         self.on_overrun_opacity_change = on_overrun_opacity_change
         self.theme_manager = theme_manager
+        if self.theme_manager is None:
+            self.theme_manager = ThemeManager(parent.winfo_toplevel())
+            self.theme_manager.apply(
+                settings.theme_name,
+                settings.appearance_mode,
+                settings.custom_theme,
+            )
         self.theme_editor: CustomThemeEditor | None = None
         self.autostart_status = autostart_status
         self.profiles = ProfilesService(PROFILES_FILE)
@@ -137,10 +145,10 @@ class SettingsView(ttk.Frame):
         )
         self.widget_always_on_top_var = tk.BooleanVar(value=settings.widget_always_on_top)
         self.autostart_status_label: ttk.Label | None = None
-        self.autostart_checkbutton: ttk.Checkbutton | None = None
+        self.autostart_switch: ToggleSwitch | None = None
         self.autostart_update_button: ttk.Button | None = None
         self.theme_previews: dict[str, tuple[tk.Frame, list[tk.Label]]] = {}
-        self.overrun_opaque_button: ttk.Button | None = None
+        self.toggle_switches: list[ToggleSwitch] = []
 
         self._build_ui()
         self._reload_profiles_list()
@@ -275,29 +283,31 @@ class SettingsView(ttk.Frame):
                 width=28,
             ).grid(row=row, column=1, columnspan=3, sticky=tk.W, pady=5)
 
-        ttk.Checkbutton(
+        self._add_toggle(
             parent,
-            text="Изменять цвет таймера",
-            variable=self.overrun_color_enabled_var,
-        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 4))
-        ttk.Checkbutton(
-            parent,
-            text="Разрешить движение эффектов",
-            variable=self.overrun_animations_var,
-        ).grid(row=6, column=0, columnspan=4, sticky=tk.W, pady=4)
-        self.overrun_opaque_button = ttk.Button(
-            parent,
-            command=self._toggle_overrun_widget_opacity,
-            style="Ghost.TButton",
-        )
-        self.overrun_opaque_button.grid(
-            row=7,
-            column=0,
+            "Изменять цвет таймера",
+            self.overrun_color_enabled_var,
+            5,
             columnspan=4,
-            sticky=tk.W,
+            pady=(8, 4),
+        )
+        self._add_toggle(
+            parent,
+            "Разрешить движение эффектов",
+            self.overrun_animations_var,
+            6,
+            columnspan=4,
+            pady=4,
+        )
+        self._add_toggle(
+            parent,
+            "Делать виджет непрозрачным при превышении",
+            self.overrun_opaque_widget_var,
+            7,
+            columnspan=4,
+            command=self._on_overrun_widget_opacity_changed,
             pady=(4, 14),
         )
-        self._sync_overrun_opaque_button()
 
         ttk.Label(parent, text="Отдельные цвета", style="Heading.TLabel").grid(
             row=8,
@@ -389,12 +399,13 @@ class SettingsView(ttk.Frame):
 
     def _build_logic_settings(self, parent: ttk.Frame) -> None:
         """Группа настроек порядка периодов."""
-        ttk.Checkbutton(
+        self._add_toggle(
             parent,
-            text="Использовать длинный отдых",
-            variable=self.use_long_break_var,
-            command=self._update_long_break_controls,
-        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
+            "Использовать длинный отдых",
+            self.use_long_break_var,
+            0,
+            command=lambda _enabled: self._update_long_break_controls(),
+        )
         self.interval_label = ttk.Label(parent, text="Рабочих периодов до длинного отдыха:")
         self.interval_label.grid(row=1, column=0, sticky=tk.W, pady=6)
         self.interval_spinbox = ttk.Spinbox(
@@ -408,9 +419,14 @@ class SettingsView(ttk.Frame):
 
     def _build_notification_settings(self, parent: ttk.Frame) -> None:
         """Группа уведомлений и поведения после завершения периода."""
-        ttk.Checkbutton(parent, text="Уведомления включены", variable=self.notifications_enabled_var).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Звук включен", variable=self.notification_sound_enabled_var).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Автоматически переходить к следующему периоду", variable=self.auto_start_next_period_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=6)
+        self._add_toggle(parent, "Уведомления", self.notifications_enabled_var, 0)
+        self._add_toggle(parent, "Звук уведомлений", self.notification_sound_enabled_var, 1)
+        self._add_toggle(
+            parent,
+            "Автоматически переходить к следующему периоду",
+            self.auto_start_next_period_var,
+            2,
+        )
         ttk.Label(
             parent,
             text=(
@@ -478,7 +494,13 @@ class SettingsView(ttk.Frame):
             text="Чем ниже значение, тем прозрачнее виджет.",
             style="Secondary.TLabel",
         ).grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
-        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=6)
+        self._add_toggle(
+            parent,
+            "Поверх всех окон",
+            self.widget_always_on_top_var,
+            4,
+            columnspan=3,
+        )
         ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         ttk.Label(
             parent,
@@ -508,14 +530,24 @@ class SettingsView(ttk.Frame):
 
     def _build_tray_settings(self, parent: ttk.Frame) -> None:
         """Группа настроек трея и автозапуска."""
-        ttk.Checkbutton(parent, text="Сворачивать программу после запуска", variable=self.minimize_to_tray_on_start_var).grid(row=0, column=0, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="При закрытии сворачивать в трей", variable=self.close_to_tray_var).grid(row=1, column=0, sticky=tk.W, pady=6)
-        self.autostart_checkbutton = ttk.Checkbutton(
+        self._add_toggle(
             parent,
-            text="Включить автозапуск вместе с Windows",
-            variable=self.autostart_enabled_var,
+            "Сворачивать программу после запуска",
+            self.minimize_to_tray_on_start_var,
+            0,
         )
-        self.autostart_checkbutton.grid(row=2, column=0, sticky=tk.W, pady=6)
+        self._add_toggle(
+            parent,
+            "При закрытии сворачивать в трей",
+            self.close_to_tray_var,
+            1,
+        )
+        self.autostart_switch = self._add_toggle(
+            parent,
+            "Автозапуск вместе с Windows",
+            self.autostart_enabled_var,
+            2,
+        )
         self.autostart_status_label = ttk.Label(parent, text=self._autostart_status_text())
         self.autostart_status_label.grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
         self.autostart_update_button = ttk.Button(
@@ -551,6 +583,10 @@ class SettingsView(ttk.Frame):
         value = min(100, max(MIN_WIDGET_OPACITY, int(opacity)))
         self.widget_opacity_var.set(value)
         self.widget_opacity_text_var.set(f"{value}%")
+
+    def sync_overrun_widget_opacity(self, enabled: bool) -> None:
+        """Синхронизирует переключатель с изменением из другого окна."""
+        self.overrun_opaque_widget_var.set(bool(enabled))
 
     def _on_widget_opacity_changed(self, value: str) -> None:
         """Сразу применяет alpha, оставляя отложенную запись главному окну."""
@@ -634,21 +670,10 @@ class SettingsView(ttk.Frame):
         self.overrun_color_overrides[key] = None
         self._refresh_overrun_color_fields()
 
-    def _toggle_overrun_widget_opacity(self) -> None:
-        """Меняет временную непрозрачность и сразу применяет её к виджету."""
-        enabled = not self.overrun_opaque_widget_var.get()
-        self.overrun_opaque_widget_var.set(enabled)
-        self._sync_overrun_opaque_button()
+    def _on_overrun_widget_opacity_changed(self, enabled: bool) -> None:
+        """Сразу применяет выбранную временную непрозрачность к виджету."""
         if self.on_overrun_opacity_change is not None:
             self.on_overrun_opacity_change(enabled)
-
-    def _sync_overrun_opaque_button(self) -> None:
-        if self.overrun_opaque_button is None:
-            return
-        state = "ВКЛ" if self.overrun_opaque_widget_var.get() else "ВЫКЛ"
-        self.overrun_opaque_button.config(
-            text=f"Непрозрачный при превышении: {state}",
-        )
 
     def _read_overrun_visual(self, *, warn: bool) -> dict[str, object]:
         """Безопасно собирает эффект; неверные HEX заменяет цветом темы."""
@@ -760,10 +785,9 @@ class SettingsView(ttk.Frame):
 
     def _sync_autostart_controls(self) -> None:
         """Отключает галочку автозапуска при запуске из исходников."""
-        if self.autostart_checkbutton is None:
+        if self.autostart_switch is None:
             return
-        state = tk.NORMAL if is_frozen_app() else tk.DISABLED
-        self.autostart_checkbutton.config(state=state)
+        self.autostart_switch.set_enabled(is_frozen_app())
         if self.autostart_update_button is not None:
             button_state = tk.NORMAL if is_frozen_app() and self.autostart_status == AUTOSTART_ENABLED_STALE else tk.DISABLED
             self.autostart_update_button.config(state=button_state)
@@ -780,6 +804,37 @@ class SettingsView(ttk.Frame):
         """Добавляет строку с числовым полем."""
         ttk.Label(parent, text=text).grid(row=row, column=0, sticky=tk.W, pady=6)
         ttk.Spinbox(parent, from_=1, to=240, width=6, textvariable=variable).grid(row=row, column=1, sticky=tk.W, pady=6)
+
+    def _add_toggle(
+        self,
+        parent: ttk.Frame,
+        text: str,
+        variable: tk.BooleanVar,
+        row: int,
+        *,
+        columnspan: int = 2,
+        command: Callable[[bool], None] | None = None,
+        pady: int | tuple[int, int] = 6,
+    ) -> ToggleSwitch:
+        """Добавляет выровненный общий переключатель двоичной настройки."""
+        switch = ToggleSwitch(
+            parent,
+            text=text,
+            variable=variable,
+            command=command,
+            theme_manager=self.theme_manager,
+            animations_enabled=lambda: bool(self.overrun_animations_var.get()),
+        )
+        switch.grid(
+            row=row,
+            column=0,
+            columnspan=columnspan,
+            sticky=tk.EW,
+            pady=pady,
+        )
+        parent.columnconfigure(columnspan - 1, weight=1)
+        self.toggle_switches.append(switch)
+        return switch
 
     def _add_entry(self, parent: ttk.Frame, text: str, variable: tk.StringVar, row: int, width: int = 34) -> None:
         """Добавляет строку с текстовым полем."""
@@ -943,7 +998,6 @@ class SettingsView(ttk.Frame):
         self.overrun_opaque_widget_var.set(
             bool(self.overrun_visual["opaque_widget_during_overrun"]),
         )
-        self._sync_overrun_opaque_button()
         self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
         self.widget_type_var.set(settings.widget_type)
         self.widget_type_description_var.set(

@@ -443,6 +443,11 @@ class ThemeManager:
             self._listeners.append(listener)
         listener(self.palette)
 
+    def unregister(self, listener: Callable[[ThemePalette], None]) -> None:
+        """Удаляет закрытый компонент из списка получателей оформления."""
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
     def apply(
         self,
         theme_name: object,

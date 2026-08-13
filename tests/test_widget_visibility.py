@@ -19,14 +19,18 @@ from app.widget_settings import WIDGET_SIZE_CUSTOM, WIDGET_TYPE_EXPANDED
 from tests.test_timer_engine import make_settings
 
 
-class FakeButton:
-    """Минимальная кнопка для проверки изменяемой подписи."""
+class FakeToggle:
+    """Минимальный переключатель для проверки внешней синхронизации."""
 
-    def __init__(self) -> None:
-        self.text = ""
+    def __init__(self, command) -> None:
+        self.value = False
+        self.command = command
 
-    def config(self, **values: str) -> None:
-        self.text = values.get("text", self.text)
+    def set(self, value: bool) -> None:
+        self.value = bool(value)
+
+    def toggle(self) -> None:
+        self.command(not self.value)
 
 
 class FakeWidgetWindow:
@@ -66,7 +70,7 @@ def prepare_controller(settings: AppSettings, widget: FakeWidgetWindow) -> MainW
     window.settings = settings
     window.timer = TimerEngine(settings)
     window.widget_window = widget
-    window.widget_toggle_button = FakeButton()
+    window.widget_visibility_switch = FakeToggle(window.set_widget_visibility)
     widget.on_visibility_requested = window.set_widget_visibility
     return window
 
@@ -74,7 +78,7 @@ def prepare_controller(settings: AppSettings, widget: FakeWidgetWindow) -> MainW
 class WidgetVisibilityTests(unittest.TestCase):
     """Проверяет видимость, сохранение и единый пользовательский переключатель."""
 
-    def test_saved_false_starts_hidden_with_show_label(self) -> None:
+    def test_saved_false_starts_hidden_with_switch_off(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             settings = make_settings()
@@ -89,9 +93,9 @@ class WidgetVisibilityTests(unittest.TestCase):
 
             self.assertFalse(widget.visible)
             self.assertEqual(widget.created_windows, 0)
-            self.assertEqual(window.widget_toggle_button.text, "Показать виджет")
+            self.assertFalse(window.widget_visibility_switch.value)
 
-    def test_saved_true_starts_visible_with_hide_label(self) -> None:
+    def test_saved_true_starts_visible_with_switch_on(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             settings = make_settings()
@@ -106,9 +110,9 @@ class WidgetVisibilityTests(unittest.TestCase):
 
             self.assertTrue(widget.visible)
             self.assertEqual(widget.created_windows, 1)
-            self.assertEqual(window.widget_toggle_button.text, "Скрыть виджет")
+            self.assertTrue(window.widget_visibility_switch.value)
 
-    def test_button_toggle_and_window_close_persist_one_state(self) -> None:
+    def test_switch_and_window_close_persist_one_state(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             settings = make_settings()
@@ -117,15 +121,15 @@ class WidgetVisibilityTests(unittest.TestCase):
             timer_before = asdict(window.timer.state)
 
             with patch.object(main_window_module, "SETTINGS_FILE", path):
-                window.toggle_widget_visibility()
+                window.widget_visibility_switch.toggle()
                 self.assertTrue(load_app_settings(path).widget_enabled)
-                self.assertEqual(window.widget_toggle_button.text, "Скрыть виджет")
+                self.assertTrue(window.widget_visibility_switch.value)
 
                 widget.close_from_window()
                 self.assertFalse(load_app_settings(path).widget_enabled)
 
             self.assertFalse(widget.visible)
-            self.assertEqual(window.widget_toggle_button.text, "Показать виджет")
+            self.assertFalse(window.widget_visibility_switch.value)
             self.assertEqual(asdict(window.timer.state), timer_before)
 
     def test_repeated_show_reuses_existing_window(self) -> None:
@@ -186,7 +190,7 @@ class WidgetVisibilityTests(unittest.TestCase):
 
             self.assertFalse(window.settings.widget_enabled)
             self.assertFalse(load_app_settings(path).widget_enabled)
-            self.assertEqual(window.widget_toggle_button.text, "Показать виджет")
+            self.assertFalse(window.widget_visibility_switch.value)
             warning.assert_called_once()
 
     def test_legacy_settings_keep_visibility_and_position(self) -> None:

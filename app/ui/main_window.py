@@ -30,6 +30,7 @@ from app.ui.help_window import HelpView
 from app.ui.overrun_surface import draw_beacon, draw_wave
 from app.ui.settings_window import SettingsView
 from app.ui.stats_view import StatsView
+from app.ui.toggle_switch import ToggleSwitch
 from app.ui.tray import TrayController
 from app.ui.widget_window import WidgetActions, WidgetWindow
 from app.widget_settings import normalize_widget_opacity
@@ -46,6 +47,7 @@ class MainWindow:
         self._settings_save_after_id: str | None = None
 
         self.settings = load_app_settings(SETTINGS_FILE)
+        self.widget_enabled_var = tk.BooleanVar(value=self.settings.widget_enabled)
         self.theme_manager = ThemeManager(self.root)
         self.theme_manager.apply(
             self.settings.theme_name,
@@ -251,16 +253,22 @@ class MainWindow:
         )
         self.continue_button.grid(row=1, column=0, columnspan=4, pady=(12, 0))
 
-        self.widget_toggle_button = ttk.Button(
+        self.widget_visibility_switch = ToggleSwitch(
             controls,
-            text="Показать виджет",
-            command=self.toggle_widget_visibility,
-            style="Ghost.TButton",
+            text="Отображать виджет",
+            variable=self.widget_enabled_var,
+            command=self.set_widget_visibility,
+            theme_manager=self.theme_manager,
+            animations_enabled=lambda: bool(
+                self.settings.overrun_visual.get("animations_enabled", True)
+            ),
+            surface="card_background",
         )
-        self.widget_toggle_button.grid(
+        self.widget_visibility_switch.grid(
             row=2,
             column=0,
             columnspan=4,
+            sticky=tk.EW,
             pady=(12, 0),
         )
 
@@ -405,10 +413,6 @@ class MainWindow:
         self._sync_timer_buttons()
         self._refresh_labels()
 
-    def toggle_widget_visibility(self) -> None:
-        """Переключает виджет единственной пользовательской кнопкой."""
-        self.set_widget_visibility(not self.widget_window.is_visible())
-
     def toggle_appearance_mode(self) -> None:
         """Быстро переключает светлый/тёмный режим общей активной темы."""
         next_mode = (
@@ -524,8 +528,16 @@ class MainWindow:
 
     def set_overrun_widget_opacity(self, enabled: bool) -> None:
         """Сразу включает временные 1.0, не меняя постоянное значение alpha."""
+        normalized_enabled = bool(enabled)
+        current_enabled = bool(
+            self.settings.overrun_visual.get("opaque_widget_during_overrun", False)
+        )
+        if hasattr(self, "settings_view"):
+            self.settings_view.sync_overrun_widget_opacity(normalized_enabled)
+        if current_enabled == normalized_enabled:
+            return
         visual = dict(self.settings.overrun_visual)
-        visual["opaque_widget_during_overrun"] = bool(enabled)
+        visual["opaque_widget_during_overrun"] = normalized_enabled
         self.settings.overrun_visual = normalize_overrun_visual(visual)
         self.widget_window.apply_opacity()
         self._schedule_settings_save()
@@ -571,6 +583,7 @@ class MainWindow:
     def set_widget_visibility(self, visible: bool, *, persist: bool = True) -> bool:
         """Применяет, сохраняет и отражает единое состояние видимости виджета."""
         requested_visibility = bool(visible)
+        previous_setting = bool(self.settings.widget_enabled)
         self.settings.widget_enabled = requested_visibility
         error: Exception | None = None
         try:
@@ -584,7 +597,9 @@ class MainWindow:
 
         actual_visibility = self.widget_window.is_visible()
         self.settings.widget_enabled = actual_visibility
-        if persist or actual_visibility != requested_visibility:
+        if (
+            persist and previous_setting != actual_visibility
+        ) or actual_visibility != requested_visibility:
             try:
                 save_app_settings(SETTINGS_FILE, self.settings)
             except OSError as save_error:
@@ -602,13 +617,11 @@ class MainWindow:
         return True
 
     def _sync_widget_visibility(self) -> None:
-        """Сверяет подпись кнопки и настройку с фактическим Toplevel."""
+        """Сверяет переключатель и настройку с фактическим Toplevel."""
         visible = self.widget_window.is_visible()
         self.settings.widget_enabled = visible
-        if hasattr(self, "widget_toggle_button"):
-            self.widget_toggle_button.config(
-                text="Скрыть виджет" if visible else "Показать виджет",
-            )
+        if hasattr(self, "widget_visibility_switch"):
+            self.widget_visibility_switch.set(visible)
 
     def _on_widget_layout_changed(self, settings: AppSettings) -> None:
         """Синхронизирует ручной размер с уже открытой формой настроек."""

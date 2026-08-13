@@ -22,22 +22,6 @@ class FakeTopLevel:
             self.alpha = value
 
 
-class FakeVariable:
-    def __init__(self, value: bool) -> None:
-        self.value = value
-
-    def get(self) -> bool:
-        return self.value
-
-
-class FakeButton:
-    def __init__(self) -> None:
-        self.text = ""
-
-    def config(self, **values: str) -> None:
-        self.text = values.get("text", self.text)
-
-
 class FakeRoot:
     def __init__(self) -> None:
         self.next_id = 0
@@ -62,8 +46,14 @@ class FakeOpacityWidget:
 
 
 class FakeSettingsView:
+    def __init__(self) -> None:
+        self.overrun_opaque = None
+
     def sync_widget_opacity(self, _opacity: int) -> None:
         pass
+
+    def sync_overrun_widget_opacity(self, enabled: bool) -> None:
+        self.overrun_opaque = enabled
 
 
 class WidgetOpacityTests(unittest.TestCase):
@@ -100,22 +90,17 @@ class WidgetOpacityTests(unittest.TestCase):
         self.assertEqual(widget.apply_opacity(), 0.41)
         self.assertEqual(widget.settings.widget_opacity, 41)
 
-    def test_toggle_button_text_is_explicit_and_not_a_checkbox(self) -> None:
+    def test_temporary_opacity_uses_common_toggle_and_existing_callback(self) -> None:
         view = SettingsView.__new__(SettingsView)
-        view.overrun_opaque_widget_var = FakeVariable(True)
-        view.overrun_opaque_button = FakeButton()
-        view._sync_overrun_opaque_button()
-        self.assertEqual(
-            view.overrun_opaque_button.text,
-            "Непрозрачный при превышении: ВКЛ",
-        )
+        changes: list[bool] = []
+        view.on_overrun_opacity_change = changes.append
+        view._on_overrun_widget_opacity_changed(True)
+        self.assertEqual(changes, [True])
 
         source = inspect.getsource(SettingsView._build_overrun_settings)
-        self.assertIn("self.overrun_opaque_button = ttk.Button", source)
-        self.assertNotIn(
-            'text="Непрозрачный при превышении',
-            inspect.getsource(SettingsView._build_widget_settings),
-        )
+        self.assertIn("Делать виджет непрозрачным при превышении", source)
+        self.assertIn("self._add_toggle", source)
+        self.assertNotIn("ttk.Checkbutton", source)
 
     def test_opacity_ui_uses_clear_label_and_explanation(self) -> None:
         source = inspect.getsource(SettingsView._build_widget_settings)
@@ -142,6 +127,25 @@ class WidgetOpacityTests(unittest.TestCase):
             callback = next(iter(window.root.jobs.values()))
             callback()
             self.assertEqual(save.call_count, 1)
+
+    def test_opaque_toggle_syncs_external_state_and_saves_only_changes(self) -> None:
+        window = MainWindow.__new__(MainWindow)
+        window.settings = make_settings()
+        window.settings.overrun_visual = default_overrun_visual()
+        window.root = FakeRoot()
+        window.widget_window = FakeOpacityWidget()
+        window.settings_view = FakeSettingsView()
+        window._settings_save_after_id = None
+
+        window.set_overrun_widget_opacity(False)
+        self.assertEqual(window.root.jobs, {})
+        self.assertEqual(window.widget_window.calls, 0)
+        self.assertFalse(window.settings_view.overrun_opaque)
+
+        window.set_overrun_widget_opacity(True)
+        self.assertEqual(len(window.root.jobs), 1)
+        self.assertEqual(window.widget_window.calls, 1)
+        self.assertTrue(window.settings_view.overrun_opaque)
 
 
 if __name__ == "__main__":
