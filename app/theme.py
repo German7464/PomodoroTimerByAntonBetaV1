@@ -488,6 +488,37 @@ class ThemeManager:
             return "LongBreak.TimerMode.TLabel"
         return "Work.TimerMode.TLabel"
 
+    def apply_timer_effect(
+        self,
+        digits_color: str | None,
+        card_background: str | None,
+    ) -> None:
+        """Применяет один кадр только к карточке таймера, не затрагивая вкладки."""
+        palette = self.palette
+        background = card_background or palette.card_background
+        foreground = digits_color or palette.text_primary
+        self.style.configure("TimerCard.TFrame", background=background)
+        self.style.configure(
+            "TimerCard.Timer.TLabel",
+            background=background,
+            foreground=foreground,
+        )
+        self.style.configure(
+            "TimerCard.Secondary.TLabel",
+            background=background,
+            foreground=palette.text_secondary,
+        )
+        for style_name in (
+            "Work.TimerMode.TLabel",
+            "ShortBreak.TimerMode.TLabel",
+            "LongBreak.TimerMode.TLabel",
+            "Overwork.TimerMode.TLabel",
+            "ShortBreakOverrun.TimerMode.TLabel",
+            "LongBreakOverrun.TimerMode.TLabel",
+            "Overrun.TimerMode.TLabel",
+        ):
+            self.style.configure(style_name, background=background)
+
     def _configure_ttk_styles(self) -> None:
         palette = self.palette
         try:
@@ -504,6 +535,7 @@ class ThemeManager:
         self.style.configure(".", background=palette.background, foreground=palette.text_primary)
         self.style.configure("TFrame", background=palette.background)
         self.style.configure("Card.TFrame", background=palette.card_background)
+        self.style.configure("TimerCard.TFrame", background=palette.card_background)
         self.style.configure("Toolbar.TFrame", background=palette.background)
         self.style.configure(
             "TLabel",
@@ -543,6 +575,17 @@ class ThemeManager:
             background=palette.card_background,
             foreground=palette.text_primary,
             font=("Segoe UI Semibold", 52),
+        )
+        self.style.configure(
+            "TimerCard.Timer.TLabel",
+            background=palette.card_background,
+            foreground=palette.text_primary,
+            font=("Segoe UI Semibold", 52),
+        )
+        self.style.configure(
+            "TimerCard.Secondary.TLabel",
+            background=palette.card_background,
+            foreground=palette.text_secondary,
         )
         self.style.configure(
             "TimerMode.TLabel",

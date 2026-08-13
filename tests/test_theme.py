@@ -160,6 +160,7 @@ class ThemeTests(unittest.TestCase):
             old_data.pop("theme_name")
             old_data.pop("appearance_mode")
             old_data.pop("custom_theme")
+            old_data.pop("overrun_visual")
             old_data.pop("widget_layouts")
             old_data.pop("widget_size")
             old_data["work_minutes"] = 47

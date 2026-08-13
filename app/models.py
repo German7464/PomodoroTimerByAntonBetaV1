@@ -42,6 +42,7 @@ class TimerProfile:
     theme_name: str = "Comet"
     appearance_mode: str = "light"
     custom_theme: dict[str, dict[str, str]] = field(default_factory=dict)
+    overrun_visual: dict[str, object] = field(default_factory=dict)
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"
@@ -77,6 +78,7 @@ class AppSettings:
     theme_name: str = "Comet"
     appearance_mode: str = "light"
     custom_theme: dict[str, dict[str, str]] = field(default_factory=dict)
+    overrun_visual: dict[str, object] = field(default_factory=dict)
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"

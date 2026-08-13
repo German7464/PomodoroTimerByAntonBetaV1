@@ -16,6 +16,7 @@ from app.config import (
     DEFAULT_WORK_MINUTES,
 )
 from app.models import AppSettings, TimerProfile, TimeDisplayFormat
+from app.overrun_effects import default_overrun_visual, normalize_overrun_visual
 from app.storage import load_json, save_json
 from app.theme import (
     DEFAULT_APPEARANCE_MODE,
@@ -59,6 +60,7 @@ def default_profile() -> TimerProfile:
         theme_name=DEFAULT_THEME_NAME,
         appearance_mode=DEFAULT_APPEARANCE_MODE,
         custom_theme=default_custom_theme(),
+        overrun_visual=default_overrun_visual(),
         widget_enabled=False,
         widget_type=DEFAULT_WIDGET_TYPE,
         widget_size=DEFAULT_WIDGET_SIZE,
@@ -114,6 +116,7 @@ class ProfilesService:
             theme_name=settings.theme_name,
             appearance_mode=settings.appearance_mode,
             custom_theme=deepcopy(settings.custom_theme),
+            overrun_visual=deepcopy(settings.overrun_visual),
             widget_enabled=settings.widget_enabled,
             widget_type=settings.widget_type,
             widget_size=settings.widget_size,
@@ -165,6 +168,7 @@ class ProfilesService:
             theme_name=profile.theme_name,
             appearance_mode=profile.appearance_mode,
             custom_theme=deepcopy(profile.custom_theme),
+            overrun_visual=deepcopy(profile.overrun_visual),
             widget_enabled=profile.widget_enabled,
             widget_type=profile.widget_type,
             widget_size=profile.widget_size,
@@ -230,6 +234,9 @@ class ProfilesService:
         )
         normalized["custom_theme"] = normalize_custom_theme(
             normalized.get("custom_theme"),
+        )
+        normalized["overrun_visual"] = normalize_overrun_visual(
+            normalized.get("overrun_visual"),
         )
         normalized["widget_enabled"] = bool(normalized["widget_enabled"])
         normalized["widget_always_on_top"] = bool(normalized["widget_always_on_top"])

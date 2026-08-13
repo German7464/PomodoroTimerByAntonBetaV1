@@ -6,8 +6,13 @@ from tkinter import messagebox, ttk
 
 from app.autostart import AutostartService
 from app.config import APP_NAME, DATA_DIR_WARNING, SETTINGS_FILE, STATISTICS_FILE
-from app.models import AppSettings
+from app.models import AppSettings, TimerMode, TimeDisplayFormat
 from app.notifications import NotificationService
+from app.overrun_effects import (
+    OverrunVisualController,
+    OverrunVisualFrame,
+    normalize_overrun_visual,
+)
 from app.statistics import StatisticsService
 from app.storage import load_app_settings, save_app_settings
 from app.theme import (
@@ -69,6 +74,11 @@ class MainWindow:
             on_layout_changed=self._on_widget_layout_changed,
             theme_manager=self.theme_manager,
         )
+        self.overrun_visual_controller = OverrunVisualController(
+            self.root.after,
+            self.root.after_cancel,
+            self._apply_overrun_visual_frame,
+        )
 
         self.tray = TrayController(
             show_window=self._schedule(self.show_window),
@@ -97,6 +107,7 @@ class MainWindow:
             on_custom_theme_preview=self.preview_custom_theme,
             on_custom_theme_apply=self.apply_custom_theme,
             on_theme_preview_cancel=self.cancel_theme_preview,
+            on_overrun_preview=self.preview_overrun_visual,
             theme_manager=self.theme_manager,
         )
         notebook.add(self.settings_view, text="Настройки")
@@ -119,11 +130,15 @@ class MainWindow:
             self.theme_manager,
         )
 
-        timer_card = ttk.Frame(timer_tab, style="Card.TFrame", padding=(34, 28))
-        timer_card.pack(fill=tk.BOTH, expand=True)
+        self.timer_card = ttk.Frame(
+            timer_tab,
+            style="TimerCard.TFrame",
+            padding=(34, 28),
+        )
+        self.timer_card.pack(fill=tk.BOTH, expand=True)
 
         self.mode_label = ttk.Label(
-            timer_card,
+            self.timer_card,
             text=self.timer.mode_name(),
             style=self.theme_manager.mode_style(
                 self.timer.state.mode,
@@ -133,20 +148,20 @@ class MainWindow:
         self.mode_label.pack(pady=(0, 8))
 
         self.time_label = ttk.Label(
-            timer_card,
+            self.timer_card,
             text=self.timer.formatted_time(),
-            style="Card.Timer.TLabel",
+            style="TimerCard.Timer.TLabel",
         )
         self.time_label.pack(pady=(6, 10))
 
         self.status_label = ttk.Label(
-            timer_card,
+            self.timer_card,
             text="Таймер остановлен",
-            style="Card.Secondary.TLabel",
+            style="TimerCard.Secondary.TLabel",
         )
         self.status_label.pack(pady=(0, 22))
 
-        controls = ttk.Frame(timer_card, style="Card.TFrame")
+        controls = ttk.Frame(self.timer_card, style="TimerCard.TFrame")
         controls.pack()
 
         self.start_button = ttk.Button(
@@ -238,6 +253,9 @@ class MainWindow:
 
     def skip_period(self) -> None:
         """Пропускает текущий период Pomodoro."""
+        controller = getattr(self, "overrun_visual_controller", None)
+        if controller is not None:
+            controller.stop_preview()
         skipped_mode = self.timer.skip_period()
         if skipped_mode is None:
             self._refresh_labels()
@@ -259,6 +277,7 @@ class MainWindow:
                 self.settings_view.autostart_enabled_var.set(settings.autostart_enabled)
 
         self.settings_view.update_autostart_status(self.autostart.status())
+        settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.settings = settings
         self.apply_theme_selection(
             settings.theme_name,
@@ -278,6 +297,9 @@ class MainWindow:
 
     def reset(self) -> None:
         """Сбрасывает таймер и обновляет подписи в окне."""
+        controller = getattr(self, "overrun_visual_controller", None)
+        if controller is not None:
+            controller.stop_preview()
         if not self.timer.reset():
             self._refresh_labels()
             return
@@ -311,6 +333,9 @@ class MainWindow:
         if overrun is not None:
             self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
         self.notifications.dismiss()
+        controller = getattr(self, "overrun_visual_controller", None)
+        if controller is not None:
+            controller.stop()
         self.tray.stop()
         self.root.destroy()
 
@@ -375,6 +400,8 @@ class MainWindow:
                     self.timer.state.waiting_for_continue,
                 ),
             )
+        if hasattr(self, "overrun_visual_controller"):
+            self._sync_overrun_visual()
         if changed and persist:
             save_app_settings(SETTINGS_FILE, self.settings)
         return changed
@@ -394,6 +421,7 @@ class MainWindow:
                     self.timer.state.waiting_for_continue,
                 ),
             )
+        self._sync_overrun_visual()
 
     def apply_custom_theme(
         self,
@@ -421,6 +449,19 @@ class MainWindow:
                     self.timer.state.waiting_for_continue,
                 ),
             )
+        self._sync_overrun_visual()
+
+    def preview_overrun_visual(
+        self,
+        mode: TimerMode,
+        visual: dict[str, object],
+    ) -> None:
+        """Запускает краткий визуальный пример без команд TimerEngine."""
+        self.overrun_visual_controller.start_preview(
+            mode,
+            visual,
+            self.theme_manager.palette,
+        )
 
     def _sync_theme_button(self) -> None:
         """Обновляет понятный текст и подсказку быстрого переключателя."""
@@ -520,15 +561,18 @@ class MainWindow:
 
     def _refresh_labels(self) -> None:
         """Обновляет подписи в интерфейсе по текущему состоянию таймера."""
-        self.mode_label.config(
-            text=self.timer.mode_name(),
-            style=self.theme_manager.mode_style(
-                self.timer.state.mode,
-                self.timer.state.waiting_for_continue,
-            ),
-        )
-        self.time_label.config(text=self.timer.formatted_time())
+        controller = getattr(self, "overrun_visual_controller", None)
+        if controller is None or not controller.preview_active:
+            self.mode_label.config(
+                text=self.timer.mode_name(),
+                style=self.theme_manager.mode_style(
+                    self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
+            )
+            self.time_label.config(text=self.timer.formatted_time())
         self.widget_window.update()
+        self._sync_overrun_visual()
 
         if self.timer.state.waiting_for_continue:
             self.status_label.config(
@@ -553,6 +597,56 @@ class MainWindow:
         else:
             self.status_label.config(text="Таймер на паузе")
             self.pause_button.config(text="Продолжить")
+
+    def _sync_overrun_visual(self) -> None:
+        """Передаёт контроллеру только фактический переход в/из превышения."""
+        if not hasattr(self, "overrun_visual_controller"):
+            return
+        state = self.timer.state
+        mode = state.overrun_mode or state.mode
+        self.overrun_visual_controller.sync_actual(
+            state.waiting_for_continue,
+            mode,
+            self.settings.overrun_visual,
+            self.theme_manager.palette,
+        )
+
+    def _apply_overrun_visual_frame(self, frame: OverrunVisualFrame) -> None:
+        """Применяет единый кадр к карточке и единственному окну виджета."""
+        self.theme_manager.apply_timer_effect(
+            frame.digits_color,
+            frame.card_background,
+        )
+        if hasattr(self, "widget_window"):
+            self.widget_window.apply_overrun_visual(frame)
+        if not hasattr(self, "mode_label"):
+            return
+
+        if frame.preview and frame.mode is not None:
+            names = {
+                TimerMode.WORK: "Переработка",
+                TimerMode.SHORT_BREAK: "Короткий отдых сверх нормы",
+                TimerMode.LONG_BREAK: "Длинный отдых сверх нормы",
+            }
+            preview_time = (
+                "+00:03"
+                if self.settings.time_display_format == TimeDisplayFormat.MINUTES_SECONDS.value
+                else "+00:00:03"
+            )
+            self.mode_label.config(
+                text=names[frame.mode],
+                style=self.theme_manager.mode_style(frame.mode, True),
+            )
+            self.time_label.config(text=preview_time)
+        elif not frame.active:
+            self.mode_label.config(
+                text=self.timer.mode_name(),
+                style=self.theme_manager.mode_style(
+                    self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
+            )
+            self.time_label.config(text=self.timer.formatted_time())
 
     def _sync_timer_buttons(self) -> None:
         """Синхронизирует кнопки после команд из трея."""

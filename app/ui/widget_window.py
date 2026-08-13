@@ -5,7 +5,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 import tkinter as tk
 
-from app.models import AppSettings
+from app.models import AppSettings, TimerMode, TimeDisplayFormat
+from app.overrun_effects import INACTIVE_FRAME, OverrunVisualFrame
 from app.theme import ThemeManager, ThemePalette, mode_color
 from app.timer_engine import TimerEngine
 from app.widget_settings import (
@@ -83,13 +84,18 @@ class WidgetView:
         self.accent_buttons: list[tk.Button] = []
         self.palette: ThemePalette | None = None
         self.drag_widgets: list[tk.Widget] = [self.frame]
+        self.overrun_frame = INACTIVE_FRAME
 
     def update(self) -> None:
         """Подставляет состояние общего TimerEngine в готовую разметку."""
+        if self.overrun_frame.preview:
+            self.apply_overrun_visual(self.overrun_frame)
+            return
         display = widget_display_state(self.timer)
         self.mode_label.config(text=display.mode_name)
         self.time_label.config(text=display.formatted_time)
         self._apply_state_colors()
+        self._apply_overrun_frame()
 
     def apply_style(
         self,
@@ -122,22 +128,58 @@ class WidgetView:
                 font=("Segoe UI Semibold", parameters.button_font),
             )
         self._apply_state_colors()
+        self._apply_overrun_frame()
+
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        """Применяет общий кадр, не создавая собственного цикла анимации."""
+        self.overrun_frame = frame
+        if frame.preview and frame.mode is not None:
+            names = {
+                TimerMode.WORK: "Переработка",
+                TimerMode.SHORT_BREAK: "Короткий отдых сверх нормы",
+                TimerMode.LONG_BREAK: "Длинный отдых сверх нормы",
+            }
+            self.mode_label.config(text=names[frame.mode])
+            self.time_label.config(
+                text="+00:03"
+                if self.timer.settings.time_display_format == TimeDisplayFormat.MINUTES_SECONDS.value
+                else "+00:00:03",
+            )
+        elif not frame.preview:
+            display = widget_display_state(self.timer)
+            self.mode_label.config(text=display.mode_name)
+            self.time_label.config(text=display.formatted_time)
+        self._apply_state_colors()
+        self._apply_overrun_frame()
+
+    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
+        """Возвращает поверхности, относящиеся только к карточке виджета."""
+        return (self.frame, self.mode_label, self.time_label)
+
+    def _apply_overrun_frame(self) -> None:
+        if self.palette is None:
+            return
+        frame = self.overrun_frame
+        background = frame.card_background or self.palette.card_background
+        for widget in self._effect_background_widgets():
+            widget.configure(bg=background)
+        if frame.digits_color is not None:
+            self.time_label.configure(fg=frame.digits_color)
 
     def _apply_state_colors(self) -> None:
         """Обновляет семантический цвет режима при обычном тике и превышении."""
         if self.palette is None:
             return
+        preview_mode = self.overrun_frame.mode if self.overrun_frame.preview else None
         state_color = mode_color(
             self.palette,
-            self.timer.state.mode,
-            self.timer.state.waiting_for_continue,
+            preview_mode or self.timer.state.mode,
+            self.timer.state.waiting_for_continue or preview_mode is not None,
         )
         self.mode_label.configure(fg=state_color)
-        self.time_label.configure(
-            fg=state_color
-            if self.timer.state.waiting_for_continue
-            else self.palette.text_primary,
-        )
+        # Базовые цифры остаются обычными: их цвет меняет только выбранная
+        # область эффекта. Название режима и знак «+» различают состояние всегда.
+        self.time_label.configure(fg=self.palette.text_primary)
 
     def destroy(self) -> None:
         """Удаляет только содержимое, сохраняя Toplevel и TimerEngine."""
@@ -300,6 +342,14 @@ class ExpandedWidgetView(WidgetView):
             fg=palette.text_secondary,
             font=("Segoe UI", parameters.mode_font),
         )
+        self._apply_overrun_frame()
+
+    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
+        return super()._effect_background_widgets() + (
+            self.header,
+            self.controls,
+            self.cycle_label,
+        )
 
 
 WIDGET_VIEW_CLASSES: dict[str, type[WidgetView]] = {
@@ -349,6 +399,7 @@ class WidgetWindow:
         self._programmatic_size: tuple[int, int] | None = None
         self._last_size: tuple[int, int] | None = None
         self._content_expanded = False
+        self._overrun_frame = INACTIVE_FRAME
         if self.theme_manager is not None:
             self.theme_manager.register(self.apply_theme)
 
@@ -425,6 +476,18 @@ class WidgetWindow:
         self.view.update()
         self._fit_window_to_content()
 
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        """Передаёт общий кадр текущему виду без нового after-обработчика."""
+        self._overrun_frame = frame
+        if self.view is None:
+            return
+        if hasattr(self.view, "apply_overrun_visual"):
+            self.view.apply_overrun_visual(frame)
+        if self.window is not None:
+            self.window.configure(
+                bg=frame.card_background or self._palette().card_background,
+            )
+
     def apply_theme(self, palette: ThemePalette) -> None:
         """Обновляет открытый виджет без смены типа, геометрии или TimerEngine."""
         if self.window is None or self.view is None:
@@ -440,6 +503,8 @@ class WidgetWindow:
             height,
         )
         self.view.apply_style(palette, parameters)
+        if hasattr(self.view, "apply_overrun_visual"):
+            self.view.apply_overrun_visual(self._overrun_frame)
         self.view.update()
         self._fit_window_to_content()
 
@@ -492,6 +557,7 @@ class WidgetWindow:
             self.view.destroy()
         view_class = widget_view_class(widget_type)
         self.view = view_class(self.window, self.timer, self.actions)
+        self.view.apply_overrun_visual(self._overrun_frame)
         self._active_view_type = normalize_widget_type(widget_type)
         self._content_expanded = False
         for widget in self.view.drag_widgets:

@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import colorchooser, messagebox, ttk
 from typing import Callable
 
 from app.autostart import (
@@ -11,7 +11,19 @@ from app.autostart import (
     AUTOSTART_ENABLED_STALE,
 )
 from app.config import DEFAULT_PROFILE_NAME, PROFILES_FILE, is_frozen_app
-from app.models import AppSettings, TimeDisplayFormat
+from app.models import AppSettings, TimerMode, TimeDisplayFormat
+from app.overrun_effects import (
+    LONG_BREAK_OVERRUN_KEY,
+    OVERWORK_KEY,
+    OVERRUN_EFFECTS,
+    OVERRUN_INTENSITIES,
+    OVERRUN_SCOPES,
+    OVERRUN_SPEEDS,
+    SHORT_BREAK_OVERRUN_KEY,
+    normalize_overrun_visual,
+    overrun_key,
+    resolved_overrun_color,
+)
 from app.profiles import ProfilesService
 from app.theme import (
     APPEARANCE_DARK,
@@ -21,6 +33,8 @@ from app.theme import (
     THEME_NAMES,
     ThemeManager,
     get_palette,
+    is_hex_color,
+    mode_color,
     normalize_appearance_mode,
     normalize_theme_name,
 )
@@ -49,6 +63,7 @@ class SettingsView(ttk.Frame):
         on_custom_theme_preview: Callable[[dict[str, dict[str, str]], str], None] | None = None,
         on_custom_theme_apply: Callable[[dict[str, dict[str, str]], str], None] | None = None,
         on_theme_preview_cancel: Callable[[], None] | None = None,
+        on_overrun_preview: Callable[[TimerMode, dict[str, object]], None] | None = None,
         theme_manager: ThemeManager | None = None,
     ) -> None:
         """Создает вкладку настроек и загружает профили."""
@@ -60,6 +75,7 @@ class SettingsView(ttk.Frame):
         self.on_custom_theme_preview = on_custom_theme_preview
         self.on_custom_theme_apply = on_custom_theme_apply
         self.on_theme_preview_cancel = on_theme_preview_cancel
+        self.on_overrun_preview = on_overrun_preview
         self.theme_manager = theme_manager
         self.theme_editor: CustomThemeEditor | None = None
         self.autostart_status = autostart_status
@@ -84,6 +100,20 @@ class SettingsView(ttk.Frame):
         self.theme_name_var = tk.StringVar(value=settings.theme_name)
         self.appearance_mode_var = tk.StringVar(value=settings.appearance_mode)
         self.custom_theme = deepcopy(settings.custom_theme)
+        self.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
+        self.overrun_effect_var = tk.StringVar(value=self.overrun_visual["effect"])
+        self.overrun_scope_var = tk.StringVar(value=self.overrun_visual["scope"])
+        self.overrun_speed_var = tk.StringVar(value=self.overrun_visual["speed"])
+        self.overrun_intensity_var = tk.StringVar(value=self.overrun_visual["intensity"])
+        self.overrun_animations_var = tk.BooleanVar(
+            value=bool(self.overrun_visual["animations_enabled"]),
+        )
+        self.overrun_preview_mode_var = tk.StringVar(value="Переработка")
+        self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
+        self.overrun_color_vars = {
+            key: tk.StringVar()
+            for key in (OVERWORK_KEY, SHORT_BREAK_OVERRUN_KEY, LONG_BREAK_OVERRUN_KEY)
+        }
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
@@ -108,6 +138,7 @@ class SettingsView(ttk.Frame):
         logic_tab = ttk.Frame(notebook, padding=16)
         notifications_tab = ttk.Frame(notebook, padding=16)
         widget_tab = ttk.Frame(notebook, padding=16)
+        overrun_tab = ttk.Frame(notebook, padding=16)
         profiles_tab = ttk.Frame(notebook, padding=16)
         tray_tab = ttk.Frame(notebook, padding=16)
 
@@ -116,6 +147,7 @@ class SettingsView(ttk.Frame):
         notebook.add(logic_tab, text="Логика таймера")
         notebook.add(notifications_tab, text="Уведомления")
         notebook.add(widget_tab, text="Виджет")
+        notebook.add(overrun_tab, text="Превышение")
         notebook.add(profiles_tab, text="Профили")
         notebook.add(tray_tab, text="Трей и автозапуск")
 
@@ -124,6 +156,7 @@ class SettingsView(ttk.Frame):
         self._build_logic_settings(logic_tab)
         self._build_notification_settings(notifications_tab)
         self._build_widget_settings(widget_tab)
+        self._build_overrun_settings(overrun_tab)
         self._build_profiles_settings(profiles_tab)
         self._build_tray_settings(tray_tab)
 
@@ -199,6 +232,106 @@ class SettingsView(ttk.Frame):
             style="Secondary.TLabel",
         ).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         self._refresh_theme_previews()
+
+    def _build_overrun_settings(self, parent: ttk.Frame) -> None:
+        """Создает настройки общего эффекта главного окна и виджета."""
+        ttk.Label(
+            parent,
+            text="Индикация превышения времени",
+            style="Heading.TLabel",
+        ).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 14))
+
+        controls = (
+            ("Эффект:", self.overrun_effect_var, OVERRUN_EFFECTS),
+            ("Область:", self.overrun_scope_var, OVERRUN_SCOPES),
+            ("Скорость:", self.overrun_speed_var, OVERRUN_SPEEDS),
+            ("Интенсивность:", self.overrun_intensity_var, OVERRUN_INTENSITIES),
+        )
+        for row, (label, variable, values) in enumerate(controls, start=1):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=5)
+            ttk.Combobox(
+                parent,
+                textvariable=variable,
+                values=values,
+                state="readonly",
+                width=28,
+            ).grid(row=row, column=1, columnspan=3, sticky=tk.W, pady=5)
+
+        ttk.Checkbutton(
+            parent,
+            text="Разрешить мягкую пульсацию",
+            variable=self.overrun_animations_var,
+        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 14))
+
+        ttk.Label(parent, text="Отдельные цвета", style="Heading.TLabel").grid(
+            row=6,
+            column=0,
+            columnspan=4,
+            sticky=tk.W,
+            pady=(4, 8),
+        )
+        color_rows = (
+            (OVERWORK_KEY, "Переработка", TimerMode.WORK),
+            (SHORT_BREAK_OVERRUN_KEY, "Короткий отдых сверх нормы", TimerMode.SHORT_BREAK),
+            (LONG_BREAK_OVERRUN_KEY, "Длинный отдых сверх нормы", TimerMode.LONG_BREAK),
+        )
+        for row, (key, label, mode) in enumerate(color_rows, start=7):
+            ttk.Label(parent, text=f"{label}:").grid(row=row, column=0, sticky=tk.W, pady=5)
+            ttk.Entry(parent, textvariable=self.overrun_color_vars[key], width=10).grid(
+                row=row,
+                column=1,
+                sticky=tk.W,
+                padx=(0, 6),
+                pady=5,
+            )
+            ttk.Button(
+                parent,
+                text="Выбрать",
+                command=lambda selected_key=key: self._choose_overrun_color(selected_key),
+            ).grid(row=row, column=2, sticky=tk.W, padx=(0, 6), pady=5)
+            ttk.Button(
+                parent,
+                text="По теме",
+                command=lambda selected_key=key, selected_mode=mode: self._reset_overrun_color(
+                    selected_key,
+                    selected_mode,
+                ),
+                style="Ghost.TButton",
+            ).grid(row=row, column=3, sticky=tk.W, pady=5)
+
+        preview_card = ttk.Frame(parent, style="Card.TFrame", padding=12)
+        preview_card.grid(row=10, column=0, columnspan=4, sticky=tk.EW, pady=(16, 0))
+        ttk.Label(preview_card, text="Предпросмотр:", style="Card.TLabel").pack(
+            side=tk.LEFT,
+            padx=(0, 8),
+        )
+        ttk.Combobox(
+            preview_card,
+            textvariable=self.overrun_preview_mode_var,
+            values=(
+                "Переработка",
+                "Короткий отдых сверх нормы",
+                "Длинный отдых сверх нормы",
+            ),
+            state="readonly",
+            width=27,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            preview_card,
+            text="Предпросмотр",
+            command=self._preview_overrun,
+            style="Accent.TButton",
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            parent,
+            text=(
+                "Предпросмотр длится несколько секунд и не изменяет таймер, "
+                "статистику или уведомления. «По теме» следует за активной палитрой."
+            ),
+            style="Secondary.TLabel",
+            wraplength=660,
+        ).grid(row=11, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
+        self._refresh_overrun_color_fields()
 
     def _build_time_settings(self, parent: ttk.Frame) -> None:
         """Группа настроек длительности и формата времени."""
@@ -351,6 +484,7 @@ class SettingsView(ttk.Frame):
         self.theme_name_var.set(normalize_theme_name(theme_name))
         self.appearance_mode_var.set(normalize_appearance_mode(appearance_mode))
         self._refresh_theme_previews()
+        self._refresh_overrun_color_fields()
 
     def _on_theme_selection(self) -> None:
         """Применяет выбор карточки сразу, не ожидая сохранения всей формы."""
@@ -359,6 +493,7 @@ class SettingsView(ttk.Frame):
         self.theme_name_var.set(theme_name)
         self.appearance_mode_var.set(appearance_mode)
         self._refresh_theme_previews()
+        self._refresh_overrun_color_fields()
         if self.on_theme_change is not None:
             self.on_theme_change(theme_name, appearance_mode)
 
@@ -376,6 +511,104 @@ class SettingsView(ttk.Frame):
             )
             for swatch, color in zip(swatches, colors, strict=True):
                 swatch.configure(background=color)
+
+    def _active_form_palette(self):
+        """Возвращает палитру формы, включая ещё не сохранённую пользовательскую."""
+        return get_palette(
+            self.theme_name_var.get(),
+            self.appearance_mode_var.get(),
+            self.custom_theme,
+        )
+
+    def _refresh_overrun_color_fields(self) -> None:
+        """Показывает HEX переопределения либо динамический цвет темы."""
+        if not hasattr(self, "overrun_color_vars"):
+            return
+        palette = self._active_form_palette()
+        visual = normalize_overrun_visual(
+            {**self.overrun_visual, "colors": self.overrun_color_overrides},
+        )
+        for mode in TimerMode:
+            key = overrun_key(mode)
+            color = self.overrun_color_overrides.get(key)
+            self.overrun_color_vars[key].set(
+                color or resolved_overrun_color(visual, palette, mode),
+            )
+
+    def _choose_overrun_color(self, key: str) -> None:
+        """Открывает нативный выбор цвета для одного вида превышения."""
+        selected = colorchooser.askcolor(
+            color=self.overrun_color_vars[key].get(),
+            parent=self,
+            title="Цвет превышения времени",
+        )[1]
+        if selected is None:
+            return
+        normalized = selected.upper()
+        self.overrun_color_overrides[key] = normalized
+        self.overrun_color_vars[key].set(normalized)
+
+    def _reset_overrun_color(self, key: str, _mode: TimerMode) -> None:
+        """Возвращает один цвет к смысловому значению активной темы."""
+        self.overrun_color_overrides[key] = None
+        self._refresh_overrun_color_fields()
+
+    def _read_overrun_visual(self, *, warn: bool) -> dict[str, object]:
+        """Безопасно собирает эффект; неверные HEX заменяет цветом темы."""
+        invalid_labels: list[str] = []
+        labels = {
+            OVERWORK_KEY: "переработка",
+            SHORT_BREAK_OVERRUN_KEY: "короткий отдых сверх нормы",
+            LONG_BREAK_OVERRUN_KEY: "длинный отдых сверх нормы",
+        }
+        palette = self._active_form_palette()
+        for mode in TimerMode:
+            key = overrun_key(mode)
+            value = self.overrun_color_vars[key].get().strip()
+            themed = mode_color(palette, mode, waiting_for_continue=True)
+            if not is_hex_color(value):
+                self.overrun_color_overrides[key] = None
+                self.overrun_color_vars[key].set(themed)
+                invalid_labels.append(labels[key])
+            elif self.overrun_color_overrides.get(key) is None and value.upper() == themed.upper():
+                self.overrun_color_overrides[key] = None
+            else:
+                self.overrun_color_overrides[key] = value.upper()
+
+        if invalid_labels and warn:
+            messagebox.showwarning(
+                "Индикация превышения",
+                "Некорректные HEX-цвета заменены значениями активной темы: "
+                + ", ".join(invalid_labels)
+                + ".",
+            )
+        self.overrun_visual = normalize_overrun_visual(
+            {
+                "effect": self.overrun_effect_var.get(),
+                "scope": self.overrun_scope_var.get(),
+                "speed": self.overrun_speed_var.get(),
+                "intensity": self.overrun_intensity_var.get(),
+                "animations_enabled": self.overrun_animations_var.get(),
+                "colors": self.overrun_color_overrides,
+            },
+        )
+        return deepcopy(self.overrun_visual)
+
+    def _preview_overrun(self) -> None:
+        """Передаёт фиктивный режим единому контроллеру главного окна."""
+        if self.on_overrun_preview is None:
+            messagebox.showwarning(
+                "Индикация превышения",
+                "Предпросмотр недоступен в этом окне.",
+            )
+            return
+        modes = {
+            "Переработка": TimerMode.WORK,
+            "Короткий отдых сверх нормы": TimerMode.SHORT_BREAK,
+            "Длинный отдых сверх нормы": TimerMode.LONG_BREAK,
+        }
+        mode = modes.get(self.overrun_preview_mode_var.get(), TimerMode.WORK)
+        self.on_overrun_preview(mode, self._read_overrun_visual(warn=True))
 
     def _open_theme_editor(self) -> None:
         """Открывает один редактор пользовательской копии палитр."""
@@ -414,6 +647,7 @@ class SettingsView(ttk.Frame):
         self.appearance_mode_var.set(appearance_mode)
         self.on_custom_theme_apply(custom_theme, appearance_mode)
         self._refresh_theme_previews()
+        self._refresh_overrun_color_fields()
 
     def _autostart_status_text(self) -> str:
         """Возвращает понятное описание текущего состояния автозапуска."""
@@ -562,6 +796,7 @@ class SettingsView(ttk.Frame):
             theme_name=normalize_theme_name(self.theme_name_var.get()),
             appearance_mode=normalize_appearance_mode(self.appearance_mode_var.get()),
             custom_theme=deepcopy(self.custom_theme),
+            overrun_visual=self._read_overrun_visual(warn=True),
             widget_enabled=self.settings.widget_enabled,
             widget_type=widget_type,
             widget_size=self.widget_size_var.get(),
@@ -595,6 +830,15 @@ class SettingsView(ttk.Frame):
         self.theme_name_var.set(settings.theme_name)
         self.appearance_mode_var.set(settings.appearance_mode)
         self.custom_theme = deepcopy(settings.custom_theme)
+        self.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
+        self.overrun_effect_var.set(self.overrun_visual["effect"])
+        self.overrun_scope_var.set(self.overrun_visual["scope"])
+        self.overrun_speed_var.set(self.overrun_visual["speed"])
+        self.overrun_intensity_var.set(self.overrun_visual["intensity"])
+        self.overrun_animations_var.set(
+            bool(self.overrun_visual["animations_enabled"]),
+        )
+        self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
         self.widget_type_var.set(settings.widget_type)
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
@@ -602,6 +846,7 @@ class SettingsView(ttk.Frame):
         self.widget_always_on_top_var.set(settings.widget_always_on_top)
         self._update_long_break_controls()
         self._refresh_theme_previews()
+        self._refresh_overrun_color_fields()
 
     def _preserve_widget_visibility(self, settings: AppSettings) -> None:
         """Не позволяет профилям подменять состояние кнопки главного окна."""

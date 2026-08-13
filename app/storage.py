@@ -16,6 +16,7 @@ from app.config import (
     DEFAULT_WORK_MINUTES,
 )
 from app.models import AppSettings, TimeDisplayFormat
+from app.overrun_effects import default_overrun_visual, normalize_overrun_visual
 from app.theme import (
     DEFAULT_APPEARANCE_MODE,
     DEFAULT_THEME_NAME,
@@ -77,6 +78,7 @@ def default_settings_data() -> dict[str, Any]:
         "theme_name": DEFAULT_THEME_NAME,
         "appearance_mode": DEFAULT_APPEARANCE_MODE,
         "custom_theme": default_custom_theme(),
+        "overrun_visual": default_overrun_visual(),
         "widget_enabled": False,
         "widget_type": DEFAULT_WIDGET_TYPE,
         "widget_size": DEFAULT_WIDGET_SIZE,
@@ -108,6 +110,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
         settings.get("appearance_mode"),
     )
     settings["custom_theme"] = normalize_custom_theme(settings.get("custom_theme"))
+    settings["overrun_visual"] = normalize_overrun_visual(
+        settings.get("overrun_visual"),
+    )
     settings["widget_enabled"] = bool(settings["widget_enabled"])
     settings["widget_always_on_top"] = bool(settings["widget_always_on_top"])
     settings["widget_type"] = normalize_widget_type(settings.get("widget_type"))
@@ -194,6 +199,7 @@ def save_app_settings(path: Path, settings: AppSettings) -> None:
     settings.theme_name = normalize_theme_name(settings.theme_name)
     settings.appearance_mode = normalize_appearance_mode(settings.appearance_mode)
     settings.custom_theme = normalize_custom_theme(settings.custom_theme)
+    settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
     settings.widget_type = normalize_widget_type(settings.widget_type)
     settings.widget_layouts = normalize_widget_layouts(
         settings.widget_layouts,
