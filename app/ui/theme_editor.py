@@ -268,24 +268,28 @@ class CustomThemeEditor:
 
         footer = ttk.Frame(self.window, padding=(18, 8, 18, 16))
         footer.pack(fill=tk.X)
+        reset_actions = ttk.Frame(footer)
+        reset_actions.pack(fill=tk.X)
         ttk.Button(
-            footer,
+            reset_actions,
             text="Сбросить всю пользовательскую тему",
             command=self.reset_all,
         ).pack(side=tk.LEFT)
         ttk.Button(
-            footer,
+            reset_actions,
             text="Сбросить текущий режим",
             command=self.reset_current_mode,
         ).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(footer, text="Отмена", command=self.cancel).pack(side=tk.RIGHT)
+        primary_actions = ttk.Frame(footer)
+        primary_actions.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(primary_actions, text="Отмена", command=self.cancel).pack(side=tk.RIGHT)
         ttk.Button(
-            footer,
+            primary_actions,
             text="Применить",
             command=self.apply,
             style="Accent.TButton",
         ).pack(side=tk.RIGHT, padx=(0, 8))
-        ttk.Button(footer, text="Предпросмотр", command=self.preview).pack(
+        ttk.Button(primary_actions, text="Предпросмотр", command=self.preview).pack(
             side=tk.RIGHT,
             padx=(0, 8),
         )

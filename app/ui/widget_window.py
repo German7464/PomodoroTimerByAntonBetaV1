@@ -328,6 +328,15 @@ class ExpandedWidgetView(WidgetView):
         self.skip_button.config(state=protected_state)
         self.reset_button.config(state=protected_state)
 
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        """Освобождает заголовок только для длинного фиктивного preview-текста."""
+        super().apply_overrun_visual(frame)
+        self.cycle_label.config(
+            text=""
+            if frame.preview
+            else f"Рабочих периодов: {self.timer.state.completed_work_periods}",
+        )
+
     def apply_style(
         self,
         palette: ThemePalette,
