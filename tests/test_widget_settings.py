@@ -7,6 +7,7 @@ import unittest
 
 from app.storage import default_settings_data, load_app_settings, save_json
 from app.timer_engine import TimerEngine
+from app.overrun_effects import EFFECT_SCALE, OverrunVisualFrame
 from app.ui.widget_window import (
     CompactWidgetView,
     ExpandedWidgetView,
@@ -15,6 +16,7 @@ from app.ui.widget_window import (
     RingWidgetView,
     RowWidgetView,
     ScoreboardWidgetView,
+    WidgetWindow,
     ring_progress,
     widget_display_state,
     widget_view_class,
@@ -22,6 +24,7 @@ from app.ui.widget_window import (
 from app.widget_settings import (
     DEFAULT_WIDGET_SIZE,
     DEFAULT_WIDGET_TYPE,
+    MIN_WIDGET_OPACITY,
     WIDGET_MIN_SIZES,
     WIDGET_SIZE_CUSTOM,
     WIDGET_SIZE_LARGE,
@@ -39,7 +42,9 @@ from app.widget_settings import (
     clamp_window_position,
     content_fitted_dimensions,
     default_widget_layouts,
+    effective_widget_alpha,
     normalize_widget_layouts,
+    normalize_widget_opacity,
     set_widget_layout_size,
     widget_size_parameters,
 )
@@ -84,6 +89,30 @@ class WidgetSettingsTests(unittest.TestCase):
             self.assertEqual(settings.widget_type, WIDGET_TYPE_COMPACT)
             self.assertEqual(settings.widget_size, WIDGET_SIZE_SMALL)
             self.assertEqual(settings.widget_layouts, default_widget_layouts())
+
+    def test_opacity_uses_full_safe_range_and_preserves_legacy_values(self) -> None:
+        self.assertEqual(MIN_WIDGET_OPACITY, 5)
+        self.assertEqual(normalize_widget_opacity(0), 5)
+        self.assertEqual(normalize_widget_opacity(5), 5)
+        self.assertEqual(normalize_widget_opacity(70), 70)
+        self.assertEqual(normalize_widget_opacity(101), 100)
+        self.assertEqual(normalize_widget_opacity("broken"), 100)
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            old = default_settings_data()
+            old["widget_opacity"] = 70
+            save_json(path, old)
+            self.assertEqual(load_app_settings(path).widget_opacity, 70)
+
+            old["widget_opacity"] = 0
+            save_json(path, old)
+            self.assertEqual(load_app_settings(path).widget_opacity, 5)
+
+    def test_temporary_overrun_alpha_never_replaces_persistent_value(self) -> None:
+        self.assertEqual(effective_widget_alpha(23, False, True), 0.23)
+        self.assertEqual(effective_widget_alpha(23, True, True), 1.0)
+        self.assertEqual(effective_widget_alpha(23, True, False), 0.23)
 
     def test_all_seven_types_select_distinct_view_classes(self) -> None:
         expected = {
@@ -180,6 +209,18 @@ class WidgetSettingsTests(unittest.TestCase):
             content_fitted_dimensions(340, 215, 300, 180, 330, 205),
             (340, 215),
         )
+
+    def test_scale_frame_does_not_request_a_window_resize(self) -> None:
+        widget = WidgetWindow.__new__(WidgetWindow)
+        widget.window = object()
+        widget.view = object()
+        widget._overrun_frame = OverrunVisualFrame(
+            active=True,
+            effect=EFFECT_SCALE,
+            digit_scale=1.15,
+        )
+
+        widget._fit_window_to_content()
 
     def test_display_state_preserves_normal_and_overrun_text_for_all_views(self) -> None:
         timer = TimerEngine(make_settings())

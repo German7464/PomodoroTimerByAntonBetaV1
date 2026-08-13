@@ -12,16 +12,25 @@ from app.models import TimerMode
 from app.theme import ThemePalette, is_hex_color, mode_color
 
 
-EFFECT_NONE: Final = "Без дополнительного эффекта"
-EFFECT_COLOR: Final = "Изменение цвета"
+EFFECT_NONE: Final = "Без анимации"
 EFFECT_PULSE: Final = "Пульсация"
-EFFECT_COLOR_PULSE: Final = "Цвет и пульсация"
+EFFECT_SCALE: Final = "Увеличение цифр"
+EFFECT_BEACONS: Final = "Сигнальные маячки"
+EFFECT_BORDER: Final = "Акцентная рамка"
+EFFECT_WAVE: Final = "Волна-индикатор"
 OVERRUN_EFFECTS: Final = (
     EFFECT_NONE,
-    EFFECT_COLOR,
     EFFECT_PULSE,
-    EFFECT_COLOR_PULSE,
+    EFFECT_SCALE,
+    EFFECT_BEACONS,
+    EFFECT_BORDER,
+    EFFECT_WAVE,
 )
+
+# Значения из предыдущей версии распознаются только при миграции JSON.
+LEGACY_EFFECT_NONE: Final = "Без дополнительного эффекта"
+EFFECT_COLOR: Final = "Изменение цвета"
+EFFECT_COLOR_PULSE: Final = "Цвет и пульсация"
 
 SCOPE_DIGITS: Final = "Только цифры таймера"
 SCOPE_CARD: Final = "Карточка таймера"
@@ -51,7 +60,7 @@ OVERRUN_COLOR_KEYS: Final = (
     LONG_BREAK_OVERRUN_KEY,
 )
 
-DEFAULT_EFFECT: Final = EFFECT_COLOR_PULSE
+DEFAULT_EFFECT: Final = EFFECT_PULSE
 DEFAULT_SCOPE: Final = SCOPE_BOTH
 DEFAULT_SPEED: Final = SPEED_NORMAL
 DEFAULT_INTENSITY: Final = INTENSITY_MEDIUM
@@ -72,16 +81,28 @@ _CARD_FACTORS: Final = {
     INTENSITY_MEDIUM: 0.18,
     INTENSITY_STRONG: 0.28,
 }
+_SCALE_FACTORS: Final = {
+    INTENSITY_WEAK: 0.05,
+    INTENSITY_MEDIUM: 0.10,
+    INTENSITY_STRONG: 0.15,
+}
+_BORDER_WIDTHS: Final = {
+    INTENSITY_WEAK: 1.0,
+    INTENSITY_MEDIUM: 2.0,
+    INTENSITY_STRONG: 3.0,
+}
 
 
 def default_overrun_visual() -> dict[str, object]:
     """Возвращает безопасные настройки; ``None`` у цвета означает «по теме»."""
     return {
         "effect": DEFAULT_EFFECT,
+        "color_enabled": True,
         "scope": DEFAULT_SCOPE,
         "speed": DEFAULT_SPEED,
         "intensity": DEFAULT_INTENSITY,
         "animations_enabled": True,
+        "opaque_widget_during_overrun": False,
         "colors": {key: None for key in OVERRUN_COLOR_KEYS},
     }
 
@@ -91,23 +112,35 @@ def normalize_overrun_visual(value: object) -> dict[str, object]:
     defaults = default_overrun_visual()
     raw = value if isinstance(value, dict) else {}
     normalized = dict(defaults)
+    raw_effect = raw.get("effect")
+    legacy_effects = {
+        LEGACY_EFFECT_NONE: (EFFECT_NONE, False),
+        EFFECT_COLOR: (EFFECT_NONE, True),
+        EFFECT_COLOR_PULSE: (EFFECT_PULSE, True),
+    }
+    if raw_effect in OVERRUN_EFFECTS:
+        normalized["effect"] = raw_effect
+        legacy_color_default = defaults["color_enabled"]
+    elif raw_effect in legacy_effects:
+        normalized["effect"], legacy_color_default = legacy_effects[raw_effect]
+    else:
+        normalized["effect"] = defaults["effect"]
+        legacy_color_default = defaults["color_enabled"]
+
     for key, allowed in (
-        ("effect", OVERRUN_EFFECTS),
         ("scope", OVERRUN_SCOPES),
         ("speed", OVERRUN_SPEEDS),
         ("intensity", OVERRUN_INTENSITIES),
     ):
         candidate = raw.get(key)
         normalized[key] = candidate if candidate in allowed else defaults[key]
-    animation_value = raw.get(
-        "animations_enabled",
-        defaults["animations_enabled"],
-    )
-    normalized["animations_enabled"] = (
-        animation_value
-        if isinstance(animation_value, bool)
-        else defaults["animations_enabled"]
-    )
+    for key, default in (
+        ("color_enabled", legacy_color_default),
+        ("animations_enabled", defaults["animations_enabled"]),
+        ("opaque_widget_during_overrun", defaults["opaque_widget_during_overrun"]),
+    ):
+        candidate = raw.get(key, default)
+        normalized[key] = candidate if isinstance(candidate, bool) else default
     raw_colors = raw.get("colors") if isinstance(raw.get("colors"), dict) else {}
     normalized["colors"] = {
         key: str(raw_colors[key]).strip().upper()
@@ -157,6 +190,14 @@ def pulse_phase(elapsed_seconds: float, speed: object) -> float:
     return (1.0 - cos(2.0 * pi * (elapsed % period) / period)) / 2.0
 
 
+def cycle_phase(elapsed_seconds: float, speed: object) -> float:
+    """Возвращает линейную фазу 0..1 для спокойного движения волны."""
+    normalized_speed = speed if speed in OVERRUN_SPEEDS else DEFAULT_SPEED
+    period = _SPEED_PERIODS[normalized_speed]
+    elapsed = max(0.0, float(elapsed_seconds))
+    return (elapsed % period) / period
+
+
 @dataclass(frozen=True)
 class OverrunVisualFrame:
     """Один общий кадр для главного окна и открытого виджета."""
@@ -167,6 +208,13 @@ class OverrunVisualFrame:
     card_background: str | None = None
     phase: float = 0.0
     preview: bool = False
+    effect: str = EFFECT_NONE
+    effect_color: str | None = None
+    digit_scale: float = 1.0
+    beacon_level: float = 0.0
+    border_color: str | None = None
+    border_width: float = 0.0
+    wave_position: float | None = None
 
 
 INACTIVE_FRAME: Final = OverrunVisualFrame(active=False)
@@ -181,39 +229,57 @@ def calculate_overrun_frame(
     """Рассчитывает кадр без обращения к Tkinter, таймеру и статистике."""
     settings = normalize_overrun_visual(visual)
     effect = settings["effect"]
-    if effect == EFFECT_NONE:
-        return OverrunVisualFrame(active=True, mode=mode)
-
     scope = settings["scope"]
     intensity = settings["intensity"]
     animations_enabled = bool(settings["animations_enabled"])
-    has_pulse = effect in {EFFECT_PULSE, EFFECT_COLOR_PULSE} and animations_enabled
-    phase = pulse_phase(elapsed_seconds, settings["speed"]) if has_pulse else 1.0
+    animated = effect != EFFECT_NONE and animations_enabled
+    phase = pulse_phase(elapsed_seconds, settings["speed"]) if animated else 0.5
     state_color = resolved_overrun_color(settings, palette, mode)
+    color_enabled = bool(settings["color_enabled"])
 
-    if effect == EFFECT_PULSE and has_pulse:
-        digit_amount = phase * _INTENSITY_FACTORS[intensity]
-        card_amount = phase * _CARD_FACTORS[intensity]
-    elif effect == EFFECT_COLOR_PULSE and has_pulse:
-        # Цвет состояния остается основой, а мягкая фаза слегка возвращает его
-        # к обычному цвету — знак и название состояния при этом не меняются.
-        digit_amount = 1.0 - ((1.0 - phase) * _INTENSITY_FACTORS[intensity] * 0.55)
-        card_amount = _CARD_FACTORS[intensity] * (0.55 + 0.45 * phase)
-    else:
-        # При отключении движения пульсирующие варианты становятся статическими.
-        digit_amount = 1.0
-        card_amount = _CARD_FACTORS[intensity]
+    digit_amount = 1.0
+    card_amount = _CARD_FACTORS[intensity]
+    if effect == EFFECT_PULSE and animated:
+        if color_enabled:
+            digit_amount = 1.0 - ((1.0 - phase) * _INTENSITY_FACTORS[intensity] * 0.55)
+            card_amount *= 0.55 + (0.45 * phase)
+        else:
+            digit_amount = phase * _INTENSITY_FACTORS[intensity]
+            card_amount = phase * _CARD_FACTORS[intensity]
 
     digits_color = None
-    if scope in {SCOPE_DIGITS, SCOPE_BOTH}:
+    if scope in {SCOPE_DIGITS, SCOPE_BOTH} and (color_enabled or effect == EFFECT_PULSE):
         digits_color = interpolate_color(palette.text_primary, state_color, digit_amount)
 
     card_background = None
-    if scope in {SCOPE_CARD, SCOPE_BOTH}:
+    if scope in {SCOPE_CARD, SCOPE_BOTH} and (color_enabled or effect == EFFECT_PULSE):
         card_background = interpolate_color(
             palette.card_background,
             state_color,
             card_amount,
+        )
+
+    digit_scale = 1.0
+    if effect == EFFECT_SCALE and animated:
+        digit_scale += _SCALE_FACTORS[intensity] * phase
+
+    beacon_level = 0.0
+    if effect == EFFECT_BEACONS:
+        beacon_level = 0.35 + (0.65 * phase) if animated else 0.72
+
+    border_color = None
+    border_width = 0.0
+    if effect == EFFECT_BORDER:
+        border_amount = 0.45 + (0.55 * phase) if animated else 0.72
+        border_color = interpolate_color(palette.border, state_color, border_amount)
+        border_width = _BORDER_WIDTHS[intensity]
+
+    wave_position = None
+    if effect == EFFECT_WAVE:
+        wave_position = (
+            cycle_phase(elapsed_seconds, settings["speed"])
+            if animated
+            else 0.5
         )
 
     return OverrunVisualFrame(
@@ -222,16 +288,20 @@ def calculate_overrun_frame(
         digits_color=digits_color,
         card_background=card_background,
         phase=phase,
+        effect=effect,
+        effect_color=state_color,
+        digit_scale=digit_scale,
+        beacon_level=beacon_level,
+        border_color=border_color,
+        border_width=border_width,
+        wave_position=wave_position,
     )
 
 
 def visual_uses_animation(visual: object) -> bool:
     """Определяет, нужен ли периодический callback для фактического эффекта."""
     settings = normalize_overrun_visual(visual)
-    return bool(settings["animations_enabled"]) and settings["effect"] in {
-        EFFECT_PULSE,
-        EFFECT_COLOR_PULSE,
-    }
+    return bool(settings["animations_enabled"]) and settings["effect"] != EFFECT_NONE
 
 
 class OverrunVisualController:

@@ -115,6 +115,17 @@ def normalize_widget_opacity(value: Any, default: int = 100) -> int:
     return _bounded_int(value, default, MIN_WIDGET_OPACITY, 100)
 
 
+def effective_widget_alpha(
+    opacity: Any,
+    opaque_during_overrun: bool,
+    overrun_active: bool,
+) -> float:
+    """Возвращает системный alpha без изменения постоянной настройки."""
+    if opaque_during_overrun and overrun_active:
+        return 1.0
+    return normalize_widget_opacity(opacity) / 100.0
+
+
 def normalize_widget_type(value: Any) -> str:
     """Возвращает поддерживаемый тип или совместимый компактный вариант."""
     text = str(value or "").strip()

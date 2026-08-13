@@ -29,9 +29,9 @@ from app.theme import (
 from app.widget_settings import (
     DEFAULT_WIDGET_SIZE,
     DEFAULT_WIDGET_TYPE,
-    MIN_WIDGET_OPACITY,
     default_widget_layouts,
     normalize_widget_layouts,
+    normalize_widget_opacity,
     normalize_widget_size,
     normalize_widget_type,
     set_widget_layout_size,
@@ -264,12 +264,8 @@ class ProfilesService:
             normalized["widget_text_color"],
             "#ffffff",
         )
-        normalized["widget_opacity"] = min(
-            100,
-            max(
-                MIN_WIDGET_OPACITY,
-                self._positive_int(normalized["widget_opacity"], 100),
-            ),
+        normalized["widget_opacity"] = normalize_widget_opacity(
+            normalized.get("widget_opacity"),
         )
         for key, default_value in (
             ("work_end_message", "Рабочий период завершен. Время отдохнуть."),

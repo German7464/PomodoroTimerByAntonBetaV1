@@ -7,10 +7,14 @@ import unittest
 
 from app.models import TimerMode
 from app.overrun_effects import (
-    EFFECT_COLOR,
-    EFFECT_COLOR_PULSE,
+    EFFECT_BEACONS,
+    EFFECT_BORDER,
     EFFECT_NONE,
     EFFECT_PULSE,
+    EFFECT_SCALE,
+    EFFECT_WAVE,
+    EFFECT_COLOR_PULSE,
+    LEGACY_EFFECT_NONE,
     INACTIVE_FRAME,
     LONG_BREAK_OVERRUN_KEY,
     OVERWORK_KEY,
@@ -22,6 +26,7 @@ from app.overrun_effects import (
     SCOPE_CARD,
     SCOPE_DIGITS,
     calculate_overrun_frame,
+    cycle_phase,
     default_overrun_visual,
     interpolate_color,
     normalize_overrun_visual,
@@ -112,7 +117,7 @@ class OverrunEffectsTests(unittest.TestCase):
             settings = make_settings()
             settings.overrun_visual = normalize_overrun_visual(
                 {
-                    "effect": EFFECT_COLOR,
+                    "effect": EFFECT_BORDER,
                     "scope": SCOPE_CARD,
                     "speed": "Быстро",
                     "intensity": "Сильно",
@@ -140,7 +145,7 @@ class OverrunEffectsTests(unittest.TestCase):
 
         normalized = normalize_overrun_visual(value)
 
-        self.assertEqual(normalized["effect"], EFFECT_COLOR_PULSE)
+        self.assertEqual(normalized["effect"], EFFECT_PULSE)
         self.assertEqual(normalized["scope"], SCOPE_CARD)
         self.assertFalse(normalized["animations_enabled"])
         self.assertIsNone(normalized["colors"][OVERWORK_KEY])
@@ -153,7 +158,28 @@ class OverrunEffectsTests(unittest.TestCase):
             ],
         )
 
+    def test_legacy_effect_names_migrate_to_primary_effect_and_color_toggle(self) -> None:
+        legacy_combined = normalize_overrun_visual({"effect": EFFECT_COLOR_PULSE})
+        legacy_none = normalize_overrun_visual({"effect": LEGACY_EFFECT_NONE})
+
+        self.assertEqual(legacy_combined["effect"], EFFECT_PULSE)
+        self.assertTrue(legacy_combined["color_enabled"])
+        self.assertEqual(legacy_none["effect"], EFFECT_NONE)
+        self.assertFalse(legacy_none["color_enabled"])
+        self.assertFalse(legacy_none["opaque_widget_during_overrun"])
+
     def test_all_effect_and_scope_choices_are_preserved(self) -> None:
+        self.assertEqual(
+            OVERRUN_EFFECTS,
+            (
+                EFFECT_NONE,
+                EFFECT_PULSE,
+                EFFECT_SCALE,
+                EFFECT_BEACONS,
+                EFFECT_BORDER,
+                EFFECT_WAVE,
+            ),
+        )
         for effect in OVERRUN_EFFECTS:
             for scope in (SCOPE_DIGITS, SCOPE_CARD, SCOPE_BOTH):
                 with self.subTest(effect=effect, scope=scope):
@@ -165,7 +191,7 @@ class OverrunEffectsTests(unittest.TestCase):
 
     def test_all_effects_calculate_expected_target_areas(self) -> None:
         palette = get_palette("Comet", APPEARANCE_LIGHT)
-        for effect in (EFFECT_COLOR, EFFECT_PULSE, EFFECT_COLOR_PULSE):
+        for effect in OVERRUN_EFFECTS:
             for scope in (SCOPE_DIGITS, SCOPE_CARD, SCOPE_BOTH):
                 with self.subTest(effect=effect, scope=scope):
                     frame = calculate_overrun_frame(
@@ -214,13 +240,52 @@ class OverrunEffectsTests(unittest.TestCase):
         for elapsed in (0, 0.1, 1, 20):
             self.assertGreaterEqual(pulse_phase(elapsed, "Обычно"), 0.0)
             self.assertLessEqual(pulse_phase(elapsed, "Обычно"), 1.0)
+            self.assertGreaterEqual(cycle_phase(elapsed, "Обычно"), 0.0)
+            self.assertLess(cycle_phase(elapsed, "Обычно"), 1.0)
+
+    def test_four_structural_effects_have_bounded_frames(self) -> None:
+        palette = get_palette("Comet", APPEARANCE_LIGHT)
+        scale = calculate_overrun_frame(
+            palette,
+            TimerMode.WORK,
+            {"effect": EFFECT_SCALE, "intensity": "Сильно"},
+            0.5,
+        )
+        beacons = calculate_overrun_frame(
+            palette,
+            TimerMode.SHORT_BREAK,
+            {"effect": EFFECT_BEACONS},
+            0.5,
+        )
+        border = calculate_overrun_frame(
+            palette,
+            TimerMode.LONG_BREAK,
+            {"effect": EFFECT_BORDER},
+            0.5,
+        )
+        wave = calculate_overrun_frame(
+            palette,
+            TimerMode.WORK,
+            {"effect": EFFECT_WAVE},
+            0.5,
+        )
+
+        self.assertGreater(scale.digit_scale, 1.0)
+        self.assertLessEqual(scale.digit_scale, 1.15)
+        self.assertGreater(beacons.beacon_level, 0.0)
+        self.assertIsNotNone(beacons.effect_color)
+        self.assertIsNotNone(border.border_color)
+        self.assertGreater(border.border_width, 0.0)
+        self.assertIsNotNone(wave.wave_position)
+        self.assertGreaterEqual(wave.wave_position, 0.0)
+        self.assertLessEqual(wave.wave_position, 1.0)
 
     def test_no_effect_and_ordinary_period_do_not_add_visual_overrides(self) -> None:
         palette = get_palette("Comet", APPEARANCE_LIGHT)
         frame = calculate_overrun_frame(
             palette,
             TimerMode.WORK,
-            {"effect": EFFECT_NONE},
+            {"effect": EFFECT_NONE, "color_enabled": False},
             1.0,
         )
         scheduler = FakeScheduler()
@@ -259,6 +324,32 @@ class OverrunEffectsTests(unittest.TestCase):
         self.assertEqual(set(scheduler.jobs), first_job)
         self.assertEqual(len(scheduler.jobs), 1)
         self.assertEqual(len(frames), 1)
+
+    def test_switching_each_new_effect_replaces_the_single_callback(self) -> None:
+        palette = get_palette("Aurora", APPEARANCE_DARK)
+        scheduler = FakeScheduler()
+        frames: list[OverrunVisualFrame] = []
+        controller = OverrunVisualController(
+            scheduler.schedule,
+            scheduler.cancel,
+            frames.append,
+            lambda: scheduler.now,
+        )
+        previous_job: int | None = None
+        for effect in (EFFECT_SCALE, EFFECT_BEACONS, EFFECT_BORDER, EFFECT_WAVE):
+            visual = default_overrun_visual()
+            visual["effect"] = effect
+            controller.sync_actual(True, TimerMode.WORK, visual, palette)
+            self.assertEqual(len(scheduler.jobs), 1)
+            current_job = next(iter(scheduler.jobs))
+            if previous_job is not None:
+                self.assertNotEqual(current_job, previous_job)
+            previous_job = current_job
+            self.assertEqual(frames[-1].effect, effect)
+
+        controller.sync_actual(False, TimerMode.WORK, visual, palette)
+        self.assertEqual(scheduler.jobs, {})
+        self.assertEqual(frames[-1], INACTIVE_FRAME)
 
     def test_animation_disabled_keeps_static_color_without_callback(self) -> None:
         palette = get_palette("Warm", APPEARANCE_DARK)

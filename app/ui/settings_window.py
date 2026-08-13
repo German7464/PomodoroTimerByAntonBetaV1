@@ -65,6 +65,8 @@ class SettingsView(ttk.Frame):
         on_custom_theme_apply: Callable[[dict[str, dict[str, str]], str], None] | None = None,
         on_theme_preview_cancel: Callable[[], None] | None = None,
         on_overrun_preview: Callable[[TimerMode, dict[str, object]], None] | None = None,
+        on_widget_opacity_change: Callable[[int], None] | None = None,
+        on_overrun_opacity_change: Callable[[bool], None] | None = None,
         theme_manager: ThemeManager | None = None,
     ) -> None:
         """Создает вкладку настроек и загружает профили."""
@@ -77,6 +79,8 @@ class SettingsView(ttk.Frame):
         self.on_custom_theme_apply = on_custom_theme_apply
         self.on_theme_preview_cancel = on_theme_preview_cancel
         self.on_overrun_preview = on_overrun_preview
+        self.on_widget_opacity_change = on_widget_opacity_change
+        self.on_overrun_opacity_change = on_overrun_opacity_change
         self.theme_manager = theme_manager
         self.theme_editor: CustomThemeEditor | None = None
         self.autostart_status = autostart_status
@@ -103,11 +107,17 @@ class SettingsView(ttk.Frame):
         self.custom_theme = deepcopy(settings.custom_theme)
         self.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.overrun_effect_var = tk.StringVar(value=self.overrun_visual["effect"])
+        self.overrun_color_enabled_var = tk.BooleanVar(
+            value=bool(self.overrun_visual["color_enabled"]),
+        )
         self.overrun_scope_var = tk.StringVar(value=self.overrun_visual["scope"])
         self.overrun_speed_var = tk.StringVar(value=self.overrun_visual["speed"])
         self.overrun_intensity_var = tk.StringVar(value=self.overrun_visual["intensity"])
         self.overrun_animations_var = tk.BooleanVar(
             value=bool(self.overrun_visual["animations_enabled"]),
+        )
+        self.overrun_opaque_widget_var = tk.BooleanVar(
+            value=bool(self.overrun_visual["opaque_widget_during_overrun"]),
         )
         self.overrun_preview_mode_var = tk.StringVar(value="Переработка")
         self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
@@ -122,11 +132,15 @@ class SettingsView(ttk.Frame):
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
         self.widget_opacity_var = tk.IntVar(value=settings.widget_opacity)
+        self.widget_opacity_text_var = tk.StringVar(
+            value=f"{settings.widget_opacity}%",
+        )
         self.widget_always_on_top_var = tk.BooleanVar(value=settings.widget_always_on_top)
         self.autostart_status_label: ttk.Label | None = None
         self.autostart_checkbutton: ttk.Checkbutton | None = None
         self.autostart_update_button: ttk.Button | None = None
         self.theme_previews: dict[str, tuple[tk.Frame, list[tk.Label]]] = {}
+        self.overrun_opaque_button: ttk.Button | None = None
 
         self._build_ui()
         self._reload_profiles_list()
@@ -263,12 +277,30 @@ class SettingsView(ttk.Frame):
 
         ttk.Checkbutton(
             parent,
-            text="Разрешить мягкую пульсацию",
+            text="Изменять цвет таймера",
+            variable=self.overrun_color_enabled_var,
+        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 4))
+        ttk.Checkbutton(
+            parent,
+            text="Разрешить движение эффектов",
             variable=self.overrun_animations_var,
-        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 14))
+        ).grid(row=6, column=0, columnspan=4, sticky=tk.W, pady=4)
+        self.overrun_opaque_button = ttk.Button(
+            parent,
+            command=self._toggle_overrun_widget_opacity,
+            style="Ghost.TButton",
+        )
+        self.overrun_opaque_button.grid(
+            row=7,
+            column=0,
+            columnspan=4,
+            sticky=tk.W,
+            pady=(4, 14),
+        )
+        self._sync_overrun_opaque_button()
 
         ttk.Label(parent, text="Отдельные цвета", style="Heading.TLabel").grid(
-            row=6,
+            row=8,
             column=0,
             columnspan=4,
             sticky=tk.W,
@@ -279,7 +311,7 @@ class SettingsView(ttk.Frame):
             (SHORT_BREAK_OVERRUN_KEY, "Короткий отдых сверх нормы", TimerMode.SHORT_BREAK),
             (LONG_BREAK_OVERRUN_KEY, "Длинный отдых сверх нормы", TimerMode.LONG_BREAK),
         )
-        for row, (key, label, mode) in enumerate(color_rows, start=7):
+        for row, (key, label, mode) in enumerate(color_rows, start=9):
             ttk.Label(parent, text=f"{label}:").grid(row=row, column=0, sticky=tk.W, pady=5)
             ttk.Entry(parent, textvariable=self.overrun_color_vars[key], width=10).grid(
                 row=row,
@@ -304,7 +336,7 @@ class SettingsView(ttk.Frame):
             ).grid(row=row, column=3, sticky=tk.W, pady=5)
 
         preview_card = ttk.Frame(parent, style="Card.TFrame", padding=12)
-        preview_card.grid(row=10, column=0, columnspan=4, sticky=tk.EW, pady=(16, 0))
+        preview_card.grid(row=12, column=0, columnspan=4, sticky=tk.EW, pady=(16, 0))
         ttk.Label(preview_card, text="Предпросмотр:", style="Card.TLabel").pack(
             side=tk.LEFT,
             padx=(0, 8),
@@ -334,7 +366,7 @@ class SettingsView(ttk.Frame):
             ),
             style="Secondary.TLabel",
             wraplength=660,
-        ).grid(row=11, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
+        ).grid(row=13, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
         self._refresh_overrun_color_fields()
 
     def _build_time_settings(self, parent: ttk.Frame) -> None:
@@ -419,22 +451,47 @@ class SettingsView(ttk.Frame):
         )
         size_box.grid(row=1, column=1, sticky=tk.W, pady=6)
         size_box.bind("<<ComboboxSelected>>", self._on_widget_size_selected)
-        ttk.Label(parent, text="Прозрачность, %:").grid(row=2, column=0, sticky=tk.W, pady=6)
-        ttk.Scale(parent, from_=MIN_WIDGET_OPACITY, to=100, variable=self.widget_opacity_var, orient=tk.HORIZONTAL, length=180).grid(row=2, column=1, sticky=tk.W, pady=6)
-        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=6)
-        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
+        ttk.Label(parent, text="Непрозрачность виджета:").grid(
+            row=2,
+            column=0,
+            sticky=tk.W,
+            pady=6,
+        )
+        opacity_row = ttk.Frame(parent)
+        opacity_row.grid(row=2, column=1, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Scale(
+            opacity_row,
+            from_=MIN_WIDGET_OPACITY,
+            to=100,
+            variable=self.widget_opacity_var,
+            orient=tk.HORIZONTAL,
+            length=220,
+            command=self._on_widget_opacity_changed,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            opacity_row,
+            textvariable=self.widget_opacity_text_var,
+            width=5,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(
+            parent,
+            text="Чем ниже значение, тем прозрачнее виджет.",
+            style="Secondary.TLabel",
+        ).grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(0, 6))
+        ttk.Checkbutton(parent, text="Поверх всех окон", variable=self.widget_always_on_top_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=6)
+        ttk.Button(parent, text="Сбросить позицию текущего типа", command=self._reset_widget_position).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         ttk.Label(
             parent,
             text=(
                 "После сохранения вид меняется без перезапуска и сброса таймера.\n"
                 "Ручное изменение окна автоматически выбирает размер «Пользовательский»."
             ),
-        ).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
         ttk.Label(
             parent,
             text="Цвета виджета задаются выбранной темой оформления.",
             style="Secondary.TLabel",
-        ).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        ).grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
 
     def _build_profiles_settings(self, parent: ttk.Frame) -> None:
         """Группа управления профилями."""
@@ -488,6 +545,20 @@ class SettingsView(ttk.Frame):
         )
         if self.widget_type_var.get() == widget_type:
             self.widget_size_var.set(settings.widget_size)
+
+    def sync_widget_opacity(self, opacity: int) -> None:
+        """Синхронизирует ползунок с нормализованным постоянным значением."""
+        value = min(100, max(MIN_WIDGET_OPACITY, int(opacity)))
+        self.widget_opacity_var.set(value)
+        self.widget_opacity_text_var.set(f"{value}%")
+
+    def _on_widget_opacity_changed(self, value: str) -> None:
+        """Сразу применяет alpha, оставляя отложенную запись главному окну."""
+        opacity = min(100, max(MIN_WIDGET_OPACITY, round(float(value))))
+        self.widget_opacity_var.set(opacity)
+        self.widget_opacity_text_var.set(f"{opacity}%")
+        if self.on_widget_opacity_change is not None:
+            self.on_widget_opacity_change(opacity)
 
     def sync_theme(self, theme_name: str, appearance_mode: str) -> None:
         """Синхронизирует карточки с быстрым переключателем главного окна."""
@@ -563,6 +634,22 @@ class SettingsView(ttk.Frame):
         self.overrun_color_overrides[key] = None
         self._refresh_overrun_color_fields()
 
+    def _toggle_overrun_widget_opacity(self) -> None:
+        """Меняет временную непрозрачность и сразу применяет её к виджету."""
+        enabled = not self.overrun_opaque_widget_var.get()
+        self.overrun_opaque_widget_var.set(enabled)
+        self._sync_overrun_opaque_button()
+        if self.on_overrun_opacity_change is not None:
+            self.on_overrun_opacity_change(enabled)
+
+    def _sync_overrun_opaque_button(self) -> None:
+        if self.overrun_opaque_button is None:
+            return
+        state = "ВКЛ" if self.overrun_opaque_widget_var.get() else "ВЫКЛ"
+        self.overrun_opaque_button.config(
+            text=f"Непрозрачный при превышении: {state}",
+        )
+
     def _read_overrun_visual(self, *, warn: bool) -> dict[str, object]:
         """Безопасно собирает эффект; неверные HEX заменяет цветом темы."""
         invalid_labels: list[str] = []
@@ -595,10 +682,12 @@ class SettingsView(ttk.Frame):
         self.overrun_visual = normalize_overrun_visual(
             {
                 "effect": self.overrun_effect_var.get(),
+                "color_enabled": self.overrun_color_enabled_var.get(),
                 "scope": self.overrun_scope_var.get(),
                 "speed": self.overrun_speed_var.get(),
                 "intensity": self.overrun_intensity_var.get(),
                 "animations_enabled": self.overrun_animations_var.get(),
+                "opaque_widget_during_overrun": self.overrun_opaque_widget_var.get(),
                 "colors": self.overrun_color_overrides,
             },
         )
@@ -842,12 +931,19 @@ class SettingsView(ttk.Frame):
         self.custom_theme = deepcopy(settings.custom_theme)
         self.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.overrun_effect_var.set(self.overrun_visual["effect"])
+        self.overrun_color_enabled_var.set(
+            bool(self.overrun_visual["color_enabled"]),
+        )
         self.overrun_scope_var.set(self.overrun_visual["scope"])
         self.overrun_speed_var.set(self.overrun_visual["speed"])
         self.overrun_intensity_var.set(self.overrun_visual["intensity"])
         self.overrun_animations_var.set(
             bool(self.overrun_visual["animations_enabled"]),
         )
+        self.overrun_opaque_widget_var.set(
+            bool(self.overrun_visual["opaque_widget_during_overrun"]),
+        )
+        self._sync_overrun_opaque_button()
         self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
         self.widget_type_var.set(settings.widget_type)
         self.widget_type_description_var.set(
@@ -855,7 +951,7 @@ class SettingsView(ttk.Frame):
         )
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
-        self.widget_opacity_var.set(settings.widget_opacity)
+        self.sync_widget_opacity(settings.widget_opacity)
         self.widget_always_on_top_var.set(settings.widget_always_on_top)
         self._update_long_break_controls()
         self._refresh_theme_previews()

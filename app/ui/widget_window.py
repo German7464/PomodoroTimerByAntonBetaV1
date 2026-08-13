@@ -9,6 +9,7 @@ from app.models import AppSettings, TimerMode, TimeDisplayFormat
 from app.overrun_effects import INACTIVE_FRAME, OverrunVisualFrame
 from app.theme import ThemeManager, ThemePalette, mode_color
 from app.timer_engine import TimerEngine
+from app.ui.overrun_surface import draw_beacon, draw_wave
 from app.widget_settings import (
     WIDGET_MIN_SIZES,
     WIDGET_SIZE_CUSTOM,
@@ -22,6 +23,7 @@ from app.widget_settings import (
     WidgetSizeParameters,
     clamp_window_position,
     content_fitted_dimensions,
+    effective_widget_alpha,
     normalize_widget_layouts,
     normalize_widget_type,
     widget_size_parameters,
@@ -89,7 +91,7 @@ class WidgetView:
     ) -> None:
         self.timer = timer
         self.actions = actions
-        self.frame = tk.Frame(parent, borderwidth=0, highlightthickness=0)
+        self.frame = tk.Frame(parent, borderwidth=0, highlightthickness=3)
         self.frame.pack(fill=tk.BOTH, expand=True)
         self.mode_label: tk.Label
         self.time_label: tk.Label
@@ -98,6 +100,34 @@ class WidgetView:
         self.palette: ThemePalette | None = None
         self.drag_widgets: list[tk.Widget] = [self.frame]
         self.overrun_frame = INACTIVE_FRAME
+        self.base_time_font = 18
+        self.time_font_family = "Segoe UI Semibold"
+        self.time_font_weight = "normal"
+        self.left_beacon = tk.Canvas(
+            self.frame,
+            width=16,
+            height=16,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.right_beacon = tk.Canvas(
+            self.frame,
+            width=16,
+            height=16,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.wave_canvas = tk.Canvas(
+            self.frame,
+            height=8,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.drag_widgets.extend(
+            (self.left_beacon, self.right_beacon, self.wave_canvas),
+        )
+        for canvas in (self.left_beacon, self.right_beacon, self.wave_canvas):
+            canvas.bind("<Configure>", lambda _event: self._draw_effect_indicators())
 
     def update(self) -> None:
         """Подставляет состояние общего TimerEngine в готовую разметку."""
@@ -117,16 +147,23 @@ class WidgetView:
     ) -> None:
         """Применяет цвета и адаптивные шрифты ко всем общим элементам."""
         self.palette = palette
+        self.base_time_font = parameters.time_font
         background = palette.card_background
-        self.frame.configure(bg=background)
+        self.frame.configure(
+            bg=background,
+            highlightbackground=background,
+            highlightcolor=background,
+        )
         self.mode_label.configure(
             bg=background,
             font=("Segoe UI Semibold", parameters.mode_font),
         )
         self.time_label.configure(
             bg=background,
-            font=("Segoe UI Semibold", parameters.time_font),
+            font=(self.time_font_family, parameters.time_font, self.time_font_weight),
         )
+        for canvas in (self.left_beacon, self.right_beacon, self.wave_canvas):
+            canvas.configure(bg=background)
         for button in self.buttons:
             is_accent = button in self.accent_buttons
             button.configure(
@@ -178,6 +215,42 @@ class WidgetView:
             widget.configure(bg=background)
         if frame.digits_color is not None:
             self.time_label.configure(fg=frame.digits_color)
+        scaled_font = max(8, round(self.base_time_font * frame.digit_scale))
+        self.time_label.configure(
+            font=(self.time_font_family, scaled_font, self.time_font_weight),
+        )
+        border = frame.border_color or background
+        self.frame.configure(highlightbackground=border, highlightcolor=border)
+        self._draw_effect_indicators()
+
+    def _draw_effect_indicators(self) -> None:
+        """Рисует структурные эффекты из общего кадра без after()."""
+        if self.palette is None:
+            return
+        frame = self.overrun_frame
+        if frame.beacon_level > 0.0:
+            self.left_beacon.place(relx=0.06, rely=0.5, anchor=tk.CENTER)
+            self.right_beacon.place(relx=0.94, rely=0.5, anchor=tk.CENTER)
+            tk.Misc.tkraise(self.left_beacon)
+            tk.Misc.tkraise(self.right_beacon)
+        else:
+            self.left_beacon.place_forget()
+            self.right_beacon.place_forget()
+        small = self.frame.winfo_width() < 230
+        draw_beacon(self.left_beacon, frame, self.palette, small=small)
+        draw_beacon(self.right_beacon, frame, self.palette, small=small)
+
+        if frame.wave_position is not None:
+            self.wave_canvas.place(
+                relx=0.5,
+                rely=0.72,
+                relwidth=0.68,
+                anchor=tk.CENTER,
+            )
+            tk.Misc.tkraise(self.wave_canvas)
+        else:
+            self.wave_canvas.place_forget()
+        draw_wave(self.wave_canvas, frame, self.palette)
 
     def _apply_state_colors(self) -> None:
         """Обновляет семантический цвет режима при обычном тике и превышении."""
@@ -571,8 +644,9 @@ class ScoreboardWidgetView(WidgetView):
         palette: ThemePalette,
         parameters: WidgetSizeParameters,
     ) -> None:
+        self.time_font_family = "Consolas"
+        self.time_font_weight = "bold"
         super().apply_style(palette, parameters)
-        self.time_label.configure(font=("Consolas", parameters.time_font, "bold"))
         self._apply_overrun_frame()
 
 
@@ -686,12 +760,15 @@ class WidgetWindow:
         self.window.resizable(True, True)
         palette = self._palette()
         self.window.configure(bg=palette.card_background)
-        self.window.attributes("-alpha", settings.widget_opacity / 100)
+        self.apply_opacity()
         self.window.attributes("-topmost", settings.widget_always_on_top)
         self._set_geometry(width, height, x, y)
         self._apply_view_style(width, height, settings.widget_size)
         self.update()
         self.window.deiconify()
+        # На Windows layered-window alpha надёжно применяется после mapping.
+        self.window.update_idletasks()
+        self.apply_opacity()
 
     def update(self) -> None:
         """Обновляет активное представление без собственного цикла after()."""
@@ -715,6 +792,22 @@ class WidgetWindow:
             self.window.configure(
                 bg=frame.card_background or self._palette().card_background,
             )
+            self.apply_opacity()
+
+    def apply_opacity(self) -> float:
+        """Применяет постоянный alpha либо временные 1.0 при реальном превышении."""
+        visual = self.settings.overrun_visual
+        opaque_during_overrun = bool(
+            visual.get("opaque_widget_during_overrun", False),
+        ) if isinstance(visual, dict) else False
+        alpha = effective_widget_alpha(
+            self.settings.widget_opacity,
+            opaque_during_overrun,
+            self.timer.state.waiting_for_continue,
+        )
+        if self.window is not None:
+            self.window.attributes("-alpha", alpha)
+        return alpha
 
     def apply_theme(self, palette: ThemePalette) -> None:
         """Обновляет открытый виджет без смены типа, геометрии или TimerEngine."""
@@ -863,6 +956,10 @@ class WidgetWindow:
     def _fit_window_to_content(self) -> None:
         """Не дает DPI и длинным названиям обрезать элементы, не меняя пресет."""
         if self.window is None or self.view is None:
+            return
+        overrun_frame = getattr(self, "_overrun_frame", INACTIVE_FRAME)
+        if overrun_frame.active and overrun_frame.digit_scale > 1.0:
+            # Пресеты оставляют запас для +15%; во время анимации окно не меняется.
             return
         frame = getattr(self.view, "frame", None)
         if frame is None:

@@ -28,8 +28,8 @@ from app.theme import (
 from app.widget_settings import (
     DEFAULT_WIDGET_SIZE,
     DEFAULT_WIDGET_TYPE,
-    MIN_WIDGET_OPACITY,
     normalize_widget_layouts,
+    normalize_widget_opacity,
     normalize_widget_size,
     normalize_widget_type,
     set_widget_layout_size,
@@ -145,13 +145,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
         message = str(settings.get(key, "")).strip()
         settings[key] = message or default_value
 
-    try:
-        settings["widget_opacity"] = min(
-            100,
-            max(MIN_WIDGET_OPACITY, int(settings["widget_opacity"])),
-        )
-    except (TypeError, ValueError):
-        settings["widget_opacity"] = 100
+    settings["widget_opacity"] = normalize_widget_opacity(
+        settings.get("widget_opacity"),
+    )
 
     # Эти поля оставлены для обратной совместимости со старыми версиями.
     settings["widget_x"] = int(active_layout["x"])
@@ -201,6 +197,7 @@ def save_app_settings(path: Path, settings: AppSettings) -> None:
     settings.custom_theme = normalize_custom_theme(settings.custom_theme)
     settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
     settings.widget_type = normalize_widget_type(settings.widget_type)
+    settings.widget_opacity = normalize_widget_opacity(settings.widget_opacity)
     settings.widget_layouts = normalize_widget_layouts(
         settings.widget_layouts,
         legacy_x=settings.widget_x,

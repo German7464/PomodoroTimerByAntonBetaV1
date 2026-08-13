@@ -27,10 +27,12 @@ from app.theme import (
 )
 from app.timer_engine import TimerEngine
 from app.ui.help_window import HelpView
+from app.ui.overrun_surface import draw_beacon, draw_wave
 from app.ui.settings_window import SettingsView
 from app.ui.stats_view import StatsView
 from app.ui.tray import TrayController
 from app.ui.widget_window import WidgetActions, WidgetWindow
+from app.widget_settings import normalize_widget_opacity
 
 
 class MainWindow:
@@ -41,6 +43,7 @@ class MainWindow:
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.resizable(False, False)
+        self._settings_save_after_id: str | None = None
 
         self.settings = load_app_settings(SETTINGS_FILE)
         self.theme_manager = ThemeManager(self.root)
@@ -108,6 +111,8 @@ class MainWindow:
             on_custom_theme_apply=self.apply_custom_theme,
             on_theme_preview_cancel=self.cancel_theme_preview,
             on_overrun_preview=self.preview_overrun_visual,
+            on_widget_opacity_change=self.set_widget_opacity,
+            on_overrun_opacity_change=self.set_overrun_widget_opacity,
             theme_manager=self.theme_manager,
         )
         notebook.add(self.settings_view, text="Настройки")
@@ -130,8 +135,17 @@ class MainWindow:
             self.theme_manager,
         )
 
-        self.timer_card = ttk.Frame(
+        palette = self.theme_manager.palette
+        self.timer_border = tk.Frame(
             timer_tab,
+            borderwidth=0,
+            highlightthickness=3,
+            highlightbackground=palette.card_background,
+            bg=palette.card_background,
+        )
+        self.timer_border.pack(fill=tk.BOTH, expand=True)
+        self.timer_card = ttk.Frame(
+            self.timer_border,
             style="TimerCard.TFrame",
             padding=(34, 28),
         )
@@ -147,12 +161,47 @@ class MainWindow:
         )
         self.mode_label.pack(pady=(0, 8))
 
-        self.time_label = ttk.Label(
+        self.timer_display = tk.Frame(
             self.timer_card,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=palette.card_background,
+        )
+        self.timer_display.pack(pady=(6, 10))
+        self.timer_display.columnconfigure(1, weight=1)
+        self.main_left_beacon = tk.Canvas(
+            self.timer_display,
+            width=20,
+            height=20,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=palette.card_background,
+        )
+        self.main_left_beacon.grid(row=0, column=0, padx=(0, 8))
+        self.time_label = ttk.Label(
+            self.timer_display,
             text=self.timer.formatted_time(),
             style="TimerCard.Timer.TLabel",
         )
-        self.time_label.pack(pady=(6, 10))
+        self.time_label.grid(row=0, column=1)
+        self.main_right_beacon = tk.Canvas(
+            self.timer_display,
+            width=20,
+            height=20,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=palette.card_background,
+        )
+        self.main_right_beacon.grid(row=0, column=2, padx=(8, 0))
+        self.main_wave_canvas = tk.Canvas(
+            self.timer_display,
+            height=10,
+            width=240,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=palette.card_background,
+        )
+        self.main_wave_canvas.grid(row=1, column=1, sticky=tk.EW, pady=(2, 0))
 
         self.status_label = ttk.Label(
             self.timer_card,
@@ -276,6 +325,7 @@ class MainWindow:
                 settings.autostart_enabled = self.settings.autostart_enabled
                 self.settings_view.autostart_enabled_var.set(settings.autostart_enabled)
 
+        self._cancel_deferred_settings_save()
         self.settings_view.update_autostart_status(self.autostart.status())
         settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.settings = settings
@@ -329,6 +379,7 @@ class MainWindow:
 
     def exit_app(self) -> None:
         """Полностью завершает приложение и убирает иконку трея."""
+        self._flush_deferred_settings_save()
         overrun = self.timer.finalize_overrun_on_exit()
         if overrun is not None:
             self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
@@ -462,6 +513,47 @@ class MainWindow:
             visual,
             self.theme_manager.palette,
         )
+
+    def set_widget_opacity(self, opacity: int) -> None:
+        """Сразу меняет alpha и сохраняет итог ползунка с задержкой."""
+        self.settings.widget_opacity = normalize_widget_opacity(opacity)
+        self.widget_window.apply_opacity()
+        if hasattr(self, "settings_view"):
+            self.settings_view.sync_widget_opacity(self.settings.widget_opacity)
+        self._schedule_settings_save()
+
+    def set_overrun_widget_opacity(self, enabled: bool) -> None:
+        """Сразу включает временные 1.0, не меняя постоянное значение alpha."""
+        visual = dict(self.settings.overrun_visual)
+        visual["opaque_widget_during_overrun"] = bool(enabled)
+        self.settings.overrun_visual = normalize_overrun_visual(visual)
+        self.widget_window.apply_opacity()
+        self._schedule_settings_save()
+
+    def _schedule_settings_save(self) -> None:
+        """Объединяет поток изменений ползунка в одну запись JSON."""
+        self._cancel_deferred_settings_save()
+        self._settings_save_after_id = self.root.after(
+            500,
+            self._flush_deferred_settings_save,
+        )
+
+    def _cancel_deferred_settings_save(self) -> None:
+        after_id = getattr(self, "_settings_save_after_id", None)
+        self._settings_save_after_id = None
+        if after_id is None:
+            return
+        try:
+            self.root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _flush_deferred_settings_save(self) -> None:
+        """Сохраняет постоянные настройки; временный alpha в модель не входит."""
+        if getattr(self, "_settings_save_after_id", None) is None:
+            return
+        self._cancel_deferred_settings_save()
+        save_app_settings(SETTINGS_FILE, self.settings)
 
     def _sync_theme_button(self) -> None:
         """Обновляет понятный текст и подсказку быстрого переключателя."""
@@ -617,6 +709,22 @@ class MainWindow:
             frame.digits_color,
             frame.card_background,
         )
+        if hasattr(self, "timer_border"):
+            palette = self.theme_manager.palette
+            background = frame.card_background or palette.card_background
+            border = frame.border_color or background
+            self.timer_border.configure(
+                bg=background,
+                highlightbackground=border,
+                highlightcolor=border,
+            )
+            self.timer_display.configure(bg=background)
+            self.time_label.configure(
+                font=("Segoe UI Semibold", max(20, round(52 * frame.digit_scale))),
+            )
+            draw_beacon(self.main_left_beacon, frame, palette)
+            draw_beacon(self.main_right_beacon, frame, palette)
+            draw_wave(self.main_wave_canvas, frame, palette)
         if hasattr(self, "widget_window"):
             self.widget_window.apply_overrun_visual(frame)
         if not hasattr(self, "mode_label"):
