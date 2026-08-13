@@ -10,14 +10,19 @@ from app.storage import default_settings_data, load_app_settings, save_app_setti
 from app.theme import (
     APPEARANCE_DARK,
     APPEARANCE_LIGHT,
+    BUILTIN_THEME_NAMES,
+    CUSTOM_THEME_NAME,
+    CustomThemeDraft,
     DEFAULT_APPEARANCE_MODE,
     DEFAULT_THEME_NAME,
     PALETTES,
     THEME_NAMES,
     ThemePalette,
+    default_custom_theme,
     get_palette,
     mode_color,
     normalize_appearance_mode,
+    normalize_custom_theme,
     normalize_theme_name,
 )
 from app.timer_engine import TimerEngine
@@ -35,6 +40,8 @@ REQUIRED_COLORS = {
     "text_secondary",
     "accent",
     "accent_hover",
+    "button_background",
+    "button_text",
     "border",
     "disabled",
     "focus",
@@ -44,7 +51,9 @@ REQUIRED_COLORS = {
     "work",
     "short_break",
     "long_break",
-    "overrun",
+    "overwork",
+    "short_break_overrun",
+    "long_break_overrun",
     "on_accent",
 }
 
@@ -91,9 +100,14 @@ class FakeThemeManager:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
-    def apply(self, theme_name: str, appearance_mode: str) -> ThemePalette:
+    def apply(
+        self,
+        theme_name: str,
+        appearance_mode: str,
+        custom_theme=None,
+    ) -> ThemePalette:
         self.calls.append((theme_name, appearance_mode))
-        return get_palette(theme_name, appearance_mode)
+        return get_palette(theme_name, appearance_mode, custom_theme)
 
     def mode_style(self, _mode, waiting: bool) -> str:
         return "Overrun.TimerMode.TLabel" if waiting else "Work.TimerMode.TLabel"
@@ -145,6 +159,7 @@ class ThemeTests(unittest.TestCase):
             old_data = default_settings_data()
             old_data.pop("theme_name")
             old_data.pop("appearance_mode")
+            old_data.pop("custom_theme")
             old_data.pop("widget_layouts")
             old_data.pop("widget_size")
             old_data["work_minutes"] = 47
@@ -155,12 +170,14 @@ class ThemeTests(unittest.TestCase):
 
             self.assertEqual(settings.theme_name, DEFAULT_THEME_NAME)
             self.assertEqual(settings.appearance_mode, DEFAULT_APPEARANCE_MODE)
+            self.assertEqual(settings.custom_theme, default_custom_theme())
             self.assertEqual(settings.work_minutes, 47)
             self.assertEqual(settings.widget_x, 321)
 
     def test_all_themes_have_light_dark_and_required_semantic_colors(self) -> None:
-        self.assertEqual(tuple(PALETTES), THEME_NAMES)
-        for theme_name in THEME_NAMES:
+        self.assertEqual(tuple(PALETTES), BUILTIN_THEME_NAMES)
+        self.assertIn(CUSTOM_THEME_NAME, THEME_NAMES)
+        for theme_name in BUILTIN_THEME_NAMES:
             self.assertEqual(set(PALETTES[theme_name]), {APPEARANCE_LIGHT, APPEARANCE_DARK})
             for mode, palette in PALETTES[theme_name].items():
                 with self.subTest(theme=theme_name, mode=mode):
@@ -178,7 +195,9 @@ class ThemeTests(unittest.TestCase):
                         palette.work,
                         palette.short_break,
                         palette.long_break,
-                        palette.overrun,
+                        palette.overwork,
+                        palette.short_break_overrun,
+                        palette.long_break_overrun,
                     ):
                         self.assertGreaterEqual(
                             contrast_ratio(foreground, palette.card_background),
@@ -196,6 +215,69 @@ class ThemeTests(unittest.TestCase):
                         contrast_ratio(palette.text_primary, palette.border),
                         4.5,
                     )
+                    self.assertGreaterEqual(
+                        contrast_ratio(palette.button_text, palette.button_background),
+                        4.5,
+                    )
+
+    def test_custom_light_and_dark_palettes_are_saved_separately(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            settings = make_settings()
+            settings.theme_name = CUSTOM_THEME_NAME
+            settings.custom_theme = default_custom_theme()
+            settings.custom_theme[APPEARANCE_LIGHT]["accent"] = "#112233"
+            settings.custom_theme[APPEARANCE_DARK]["accent"] = "#AABBCC"
+
+            save_app_settings(path, settings)
+            restored = load_app_settings(path)
+
+            self.assertEqual(restored.custom_theme[APPEARANCE_LIGHT]["accent"], "#112233")
+            self.assertEqual(restored.custom_theme[APPEARANCE_DARK]["accent"], "#AABBCC")
+            self.assertEqual(
+                get_palette(
+                    CUSTOM_THEME_NAME,
+                    APPEARANCE_DARK,
+                    restored.custom_theme,
+                ).accent,
+                "#AABBCC",
+            )
+
+    def test_invalid_custom_colors_are_repaired_field_by_field(self) -> None:
+        custom = {
+            APPEARANCE_LIGHT: {
+                "accent": "#123456",
+                "text_primary": "broken",
+            },
+            APPEARANCE_DARK: "broken",
+        }
+
+        normalized = normalize_custom_theme(custom)
+
+        self.assertEqual(normalized[APPEARANCE_LIGHT]["accent"], "#123456")
+        self.assertEqual(
+            normalized[APPEARANCE_LIGHT]["text_primary"],
+            PALETTES[DEFAULT_THEME_NAME][APPEARANCE_LIGHT].text_primary,
+        )
+        self.assertEqual(
+            normalized[APPEARANCE_DARK],
+            PALETTES[DEFAULT_THEME_NAME][APPEARANCE_DARK].as_dict(),
+        )
+
+    def test_custom_draft_cancel_and_resets_restore_safe_copies(self) -> None:
+        saved = default_custom_theme("Aurora")
+        draft = CustomThemeDraft(saved)
+        draft.value[APPEARANCE_LIGHT]["accent"] = "#010203"
+
+        self.assertEqual(draft.cancel(), saved)
+        draft.reset_mode(APPEARANCE_LIGHT)
+        self.assertEqual(
+            draft.value[APPEARANCE_LIGHT],
+            PALETTES[DEFAULT_THEME_NAME][APPEARANCE_LIGHT].as_dict(),
+        )
+        self.assertEqual(draft.value[APPEARANCE_DARK], saved[APPEARANCE_DARK])
+        draft.reset_all()
+        self.assertEqual(draft.applied(), default_custom_theme())
 
     def test_invalid_theme_and_mode_fall_back_safely(self) -> None:
         self.assertEqual(normalize_theme_name("broken"), DEFAULT_THEME_NAME)

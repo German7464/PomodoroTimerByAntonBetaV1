@@ -20,6 +20,8 @@ from app.storage import load_json, save_json
 from app.theme import (
     DEFAULT_APPEARANCE_MODE,
     DEFAULT_THEME_NAME,
+    default_custom_theme,
+    normalize_custom_theme,
     normalize_appearance_mode,
     normalize_theme_name,
 )
@@ -56,6 +58,7 @@ def default_profile() -> TimerProfile:
         close_to_tray=True,
         theme_name=DEFAULT_THEME_NAME,
         appearance_mode=DEFAULT_APPEARANCE_MODE,
+        custom_theme=default_custom_theme(),
         widget_enabled=False,
         widget_type=DEFAULT_WIDGET_TYPE,
         widget_size=DEFAULT_WIDGET_SIZE,
@@ -110,6 +113,7 @@ class ProfilesService:
             close_to_tray=settings.close_to_tray,
             theme_name=settings.theme_name,
             appearance_mode=settings.appearance_mode,
+            custom_theme=deepcopy(settings.custom_theme),
             widget_enabled=settings.widget_enabled,
             widget_type=settings.widget_type,
             widget_size=settings.widget_size,
@@ -160,6 +164,7 @@ class ProfilesService:
             close_to_tray=profile.close_to_tray,
             theme_name=profile.theme_name,
             appearance_mode=profile.appearance_mode,
+            custom_theme=deepcopy(profile.custom_theme),
             widget_enabled=profile.widget_enabled,
             widget_type=profile.widget_type,
             widget_size=profile.widget_size,
@@ -222,6 +227,9 @@ class ProfilesService:
         normalized["theme_name"] = normalize_theme_name(normalized.get("theme_name"))
         normalized["appearance_mode"] = normalize_appearance_mode(
             normalized.get("appearance_mode"),
+        )
+        normalized["custom_theme"] = normalize_custom_theme(
+            normalized.get("custom_theme"),
         )
         normalized["widget_enabled"] = bool(normalized["widget_enabled"])
         normalized["widget_always_on_top"] = bool(normalized["widget_always_on_top"])

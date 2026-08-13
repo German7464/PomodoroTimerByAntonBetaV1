@@ -19,6 +19,8 @@ from app.models import AppSettings, TimeDisplayFormat
 from app.theme import (
     DEFAULT_APPEARANCE_MODE,
     DEFAULT_THEME_NAME,
+    default_custom_theme,
+    normalize_custom_theme,
     normalize_appearance_mode,
     normalize_theme_name,
 )
@@ -74,6 +76,7 @@ def default_settings_data() -> dict[str, Any]:
         "close_to_tray": True,
         "theme_name": DEFAULT_THEME_NAME,
         "appearance_mode": DEFAULT_APPEARANCE_MODE,
+        "custom_theme": default_custom_theme(),
         "widget_enabled": False,
         "widget_type": DEFAULT_WIDGET_TYPE,
         "widget_size": DEFAULT_WIDGET_SIZE,
@@ -104,6 +107,7 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
     settings["appearance_mode"] = normalize_appearance_mode(
         settings.get("appearance_mode"),
     )
+    settings["custom_theme"] = normalize_custom_theme(settings.get("custom_theme"))
     settings["widget_enabled"] = bool(settings["widget_enabled"])
     settings["widget_always_on_top"] = bool(settings["widget_always_on_top"])
     settings["widget_type"] = normalize_widget_type(settings.get("widget_type"))
@@ -189,6 +193,7 @@ def save_app_settings(path: Path, settings: AppSettings) -> None:
     """Сохраняет настройки приложения в settings.json."""
     settings.theme_name = normalize_theme_name(settings.theme_name)
     settings.appearance_mode = normalize_appearance_mode(settings.appearance_mode)
+    settings.custom_theme = normalize_custom_theme(settings.custom_theme)
     settings.widget_type = normalize_widget_type(settings.widget_type)
     settings.widget_layouts = normalize_widget_layouts(
         settings.widget_layouts,

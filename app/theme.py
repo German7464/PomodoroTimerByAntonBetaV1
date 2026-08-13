@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, fields
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Final
+from typing import Any, Callable, Final
 
 from app.models import TimerMode
 
@@ -14,7 +15,9 @@ DEFAULT_THEME_NAME: Final = "Comet"
 APPEARANCE_LIGHT: Final = "light"
 APPEARANCE_DARK: Final = "dark"
 DEFAULT_APPEARANCE_MODE: Final = APPEARANCE_LIGHT
-THEME_NAMES: Final = ("Comet", "Aurora", "Warm")
+CUSTOM_THEME_NAME: Final = "Пользовательская"
+BUILTIN_THEME_NAMES: Final = ("Comet", "Aurora", "Warm")
+THEME_NAMES: Final = (*BUILTIN_THEME_NAMES, CUSTOM_THEME_NAME)
 APPEARANCE_MODES: Final = (APPEARANCE_LIGHT, APPEARANCE_DARK)
 APPEARANCE_LABELS: Final = {
     APPEARANCE_LIGHT: "Светлая",
@@ -33,6 +36,8 @@ class ThemePalette:
     text_secondary: str
     accent: str
     accent_hover: str
+    button_background: str
+    button_text: str
     border: str
     disabled: str
     focus: str
@@ -42,12 +47,19 @@ class ThemePalette:
     work: str
     short_break: str
     long_break: str
-    overrun: str
+    overwork: str
+    short_break_overrun: str
+    long_break_overrun: str
     on_accent: str
 
     def as_dict(self) -> dict[str, str]:
         """Возвращает палитру как словарь для тестов и образцов настроек."""
         return {field.name: getattr(self, field.name) for field in fields(self)}
+
+    @property
+    def overrun(self) -> str:
+        """Совместимое имя цвета переработки для старых UI-контрактов."""
+        return self.overwork
 
 
 PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
@@ -60,6 +72,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#52615D",
             accent="#0F766E",
             accent_hover="#0B5F59",
+            button_background="#E5ECEA",
+            button_text="#17201E",
             border="#CBD7D3",
             disabled="#84928E",
             focus="#087E75",
@@ -69,7 +83,9 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#0D6F68",
             short_break="#275F9E",
             long_break="#65509A",
-            overrun="#9B3651",
+            overwork="#9B3651",
+            short_break_overrun="#9B3651",
+            long_break_overrun="#9B3651",
             on_accent="#FFFFFF",
         ),
         APPEARANCE_DARK: ThemePalette(
@@ -80,6 +96,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#B4C2BE",
             accent="#5BC7B8",
             accent_hover="#78D5C9",
+            button_background="#22302D",
+            button_text="#F2F7F5",
             border="#344541",
             disabled="#70817D",
             focus="#70D7CA",
@@ -89,7 +107,9 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#62C9BB",
             short_break="#7EB8F0",
             long_break="#B9A0F4",
-            overrun="#F18AA2",
+            overwork="#F18AA2",
+            short_break_overrun="#F18AA2",
+            long_break_overrun="#F18AA2",
             on_accent="#0E1B18",
         ),
     },
@@ -102,6 +122,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#56607E",
             accent="#4F46E5",
             accent_hover="#3F37C7",
+            button_background="#E8ECFA",
+            button_text="#182039",
             border="#D1D8EE",
             disabled="#8D95AD",
             focus="#6557EF",
@@ -111,7 +133,9 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#315E9F",
             short_break="#4B4BB7",
             long_break="#70409A",
-            overrun="#A3335E",
+            overwork="#A3335E",
+            short_break_overrun="#A3335E",
+            long_break_overrun="#A3335E",
             on_accent="#FFFFFF",
         ),
         APPEARANCE_DARK: ThemePalette(
@@ -122,6 +146,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#B7BDD4",
             accent="#9290FF",
             accent_hover="#AAA8FF",
+            button_background="#22283A",
+            button_text="#F4F5FF",
             border="#353D55",
             disabled="#747C96",
             focus="#A8A7FF",
@@ -131,7 +157,9 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#83B2F0",
             short_break="#9C9AFF",
             long_break="#C2A0F5",
-            overrun="#F190B1",
+            overwork="#F190B1",
+            short_break_overrun="#F190B1",
+            long_break_overrun="#F190B1",
             on_accent="#121426",
         ),
     },
@@ -144,6 +172,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#675548",
             accent="#A45127",
             accent_hover="#853F1D",
+            button_background="#EEE4D6",
+            button_text="#2E241C",
             border="#DCCDBB",
             disabled="#998A7C",
             focus="#B45C30",
@@ -153,7 +183,9 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#864A24",
             short_break="#566940",
             long_break="#714D72",
-            overrun="#9D3940",
+            overwork="#9D3940",
+            short_break_overrun="#9D3940",
+            long_break_overrun="#9D3940",
             on_accent="#FFFFFF",
         ),
         APPEARANCE_DARK: ThemePalette(
@@ -164,6 +196,8 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             text_secondary="#CCBFB2",
             accent="#E99A68",
             accent_hover="#F2B083",
+            button_background="#302720",
+            button_text="#FAF5EE",
             border="#493C32",
             disabled="#84776C",
             focus="#FFB485",
@@ -173,11 +207,163 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             work="#E7A16F",
             short_break="#AFC287",
             long_break="#C6A1C7",
-            overrun="#F08A8E",
+            overwork="#F08A8E",
+            short_break_overrun="#F08A8E",
+            long_break_overrun="#F08A8E",
             on_accent="#25140A",
         ),
     },
 }
+
+
+def is_hex_color(value: object) -> bool:
+    """Проверяет строгий пользовательский формат #RRGGBB."""
+    color = str(value or "").strip()
+    if len(color) != 7 or not color.startswith("#"):
+        return False
+    try:
+        int(color[1:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def normalize_palette_data(value: object, fallback: ThemePalette) -> dict[str, str]:
+    """Частично восстанавливает палитру, сохраняя каждое корректное поле."""
+    raw = value if isinstance(value, dict) else {}
+    normalized: dict[str, str] = {}
+    for field in fields(ThemePalette):
+        candidate = raw.get(field.name)
+        normalized[field.name] = (
+            str(candidate).strip().upper()
+            if is_hex_color(candidate)
+            else getattr(fallback, field.name)
+        )
+    return normalized
+
+
+def default_custom_theme(base_theme: object = DEFAULT_THEME_NAME) -> dict[str, dict[str, str]]:
+    """Создает независимые светлую и тёмную копии безопасной встроенной темы."""
+    normalized_base = normalize_builtin_theme_name(base_theme)
+    return {
+        mode: PALETTES[normalized_base][mode].as_dict()
+        for mode in APPEARANCE_MODES
+    }
+
+
+def normalize_custom_theme(value: object) -> dict[str, dict[str, str]]:
+    """Восстанавливает оба режима пользовательской темы по полям Comet."""
+    raw = value if isinstance(value, dict) else {}
+    return {
+        mode: normalize_palette_data(
+            raw.get(mode),
+            PALETTES[DEFAULT_THEME_NAME][mode],
+        )
+        for mode in APPEARANCE_MODES
+    }
+
+
+def palette_from_data(value: object, fallback: ThemePalette) -> ThemePalette:
+    """Создает неизменяемую палитру из безопасно нормализованных данных."""
+    return ThemePalette(**normalize_palette_data(value, fallback))
+
+
+def relative_luminance(color: str) -> float:
+    """Вычисляет относительную яркость цвета по формуле WCAG."""
+    channels = []
+    for offset in (1, 3, 5):
+        channel = int(color[offset : offset + 2], 16) / 255
+        channels.append(
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4,
+        )
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """Возвращает WCAG contrast ratio двух корректных HEX-цветов."""
+    first_luminance = relative_luminance(first)
+    second_luminance = relative_luminance(second)
+    lighter = max(first_luminance, second_luminance)
+    darker = min(first_luminance, second_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def palette_contrast_warnings(palette: ThemePalette) -> list[str]:
+    """Возвращает понятные предупреждения для сочетаний ниже 4,5:1."""
+    pairs = (
+        ("Основной текст / карточка", palette.text_primary, palette.card_background),
+        ("Вторичный текст / карточка", palette.text_secondary, palette.card_background),
+        ("Текст кнопок / кнопка", palette.button_text, palette.button_background),
+        ("Текст акцента / акцент", palette.on_accent, palette.accent),
+        ("Работа / карточка", palette.work, palette.card_background),
+        ("Короткий отдых / карточка", palette.short_break, palette.card_background),
+        ("Длинный отдых / карточка", palette.long_break, palette.card_background),
+        ("Переработка / карточка", palette.overwork, palette.card_background),
+        (
+            "Короткий отдых сверх нормы / карточка",
+            palette.short_break_overrun,
+            palette.card_background,
+        ),
+        (
+            "Длинный отдых сверх нормы / карточка",
+            palette.long_break_overrun,
+            palette.card_background,
+        ),
+    )
+    return [
+        f"{label}: {contrast_ratio(foreground, background):.2f}:1"
+        for label, foreground, background in pairs
+        if contrast_ratio(foreground, background) < 4.5
+    ]
+
+
+def normalize_builtin_theme_name(value: object) -> str:
+    """Возвращает имя встроенной темы, пригодной как основа копии."""
+    candidate = str(value or "").strip().casefold()
+    for name in BUILTIN_THEME_NAMES:
+        if candidate == name.casefold():
+            return name
+    return DEFAULT_THEME_NAME
+
+
+class CustomThemeDraft:
+    """Черновик редактора, отделяющий предпросмотр и отмену от сохранённых цветов."""
+
+    def __init__(self, custom_theme: object) -> None:
+        self.saved = normalize_custom_theme(custom_theme)
+        self.value = deepcopy(self.saved)
+
+    def set_mode(self, mode: object, palette_data: object) -> None:
+        """Сохраняет в черновик только нормализованный выбранный режим."""
+        normalized_mode = normalize_appearance_mode(mode)
+        self.value[normalized_mode] = normalize_palette_data(
+            palette_data,
+            PALETTES[DEFAULT_THEME_NAME][normalized_mode],
+        )
+
+    def create_mode_from(self, mode: object, base_theme: object) -> None:
+        """Заменяет режим независимой копией одной встроенной палитры."""
+        normalized_mode = normalize_appearance_mode(mode)
+        normalized_base = normalize_builtin_theme_name(base_theme)
+        self.value[normalized_mode] = PALETTES[normalized_base][normalized_mode].as_dict()
+
+    def reset_mode(self, mode: object) -> None:
+        """Возвращает выбранный режим к безопасной Comet."""
+        self.create_mode_from(mode, DEFAULT_THEME_NAME)
+
+    def reset_all(self) -> None:
+        """Возвращает оба режима к безопасной Comet."""
+        self.value = default_custom_theme()
+
+    def cancel(self) -> dict[str, dict[str, str]]:
+        """Возвращает сохранённую до открытия редактора палитру."""
+        return deepcopy(self.saved)
+
+    def applied(self) -> dict[str, dict[str, str]]:
+        """Возвращает независимую нормализованную копию результата."""
+        return normalize_custom_theme(self.value)
 
 
 def normalize_theme_name(value: object) -> str:
@@ -199,11 +385,21 @@ def normalize_appearance_mode(value: object) -> str:
     return DEFAULT_APPEARANCE_MODE
 
 
-def get_palette(theme_name: object, appearance_mode: object) -> ThemePalette:
+def get_palette(
+    theme_name: object,
+    appearance_mode: object,
+    custom_theme: object = None,
+) -> ThemePalette:
     """Возвращает нормализованную полноценную палитру."""
-    return PALETTES[normalize_theme_name(theme_name)][
-        normalize_appearance_mode(appearance_mode)
-    ]
+    normalized_theme = normalize_theme_name(theme_name)
+    normalized_mode = normalize_appearance_mode(appearance_mode)
+    if normalized_theme == CUSTOM_THEME_NAME:
+        normalized_custom = normalize_custom_theme(custom_theme)
+        return palette_from_data(
+            normalized_custom[normalized_mode],
+            PALETTES[DEFAULT_THEME_NAME][normalized_mode],
+        )
+    return PALETTES[normalized_theme][normalized_mode]
 
 
 def mode_color(
@@ -213,7 +409,11 @@ def mode_color(
 ) -> str:
     """Выбирает семантический цвет режима, сохраняя текстовое различие состояний."""
     if waiting_for_continue:
-        return palette.overrun
+        if mode == TimerMode.SHORT_BREAK:
+            return palette.short_break_overrun
+        if mode == TimerMode.LONG_BREAK:
+            return palette.long_break_overrun
+        return palette.overwork
     if mode == TimerMode.SHORT_BREAK:
         return palette.short_break
     if mode == TimerMode.LONG_BREAK:
@@ -229,7 +429,12 @@ class ThemeManager:
         self.style = ttk.Style(root)
         self.theme_name = DEFAULT_THEME_NAME
         self.appearance_mode = DEFAULT_APPEARANCE_MODE
-        self.palette = get_palette(self.theme_name, self.appearance_mode)
+        self.custom_theme = default_custom_theme()
+        self.palette = get_palette(
+            self.theme_name,
+            self.appearance_mode,
+            self.custom_theme,
+        )
         self._listeners: list[Callable[[ThemePalette], None]] = []
 
     def register(self, listener: Callable[[ThemePalette], None]) -> None:
@@ -238,11 +443,22 @@ class ThemeManager:
             self._listeners.append(listener)
         listener(self.palette)
 
-    def apply(self, theme_name: object, appearance_mode: object) -> ThemePalette:
+    def apply(
+        self,
+        theme_name: object,
+        appearance_mode: object,
+        custom_theme: object = None,
+    ) -> ThemePalette:
         """Мгновенно применяет нормализованную тему без пересоздания окон."""
         self.theme_name = normalize_theme_name(theme_name)
         self.appearance_mode = normalize_appearance_mode(appearance_mode)
-        self.palette = get_palette(self.theme_name, self.appearance_mode)
+        if custom_theme is not None:
+            self.custom_theme = normalize_custom_theme(custom_theme)
+        self.palette = get_palette(
+            self.theme_name,
+            self.appearance_mode,
+            self.custom_theme,
+        )
         self._configure_ttk_styles()
         self.apply_to_window(self.root)
         for listener in tuple(self._listeners):
@@ -261,7 +477,11 @@ class ThemeManager:
     def mode_style(self, mode: TimerMode, waiting_for_continue: bool) -> str:
         """Возвращает ttk-стиль цветовой метки режима таймера."""
         if waiting_for_continue:
-            return "Overrun.TimerMode.TLabel"
+            if mode == TimerMode.SHORT_BREAK:
+                return "ShortBreakOverrun.TimerMode.TLabel"
+            if mode == TimerMode.LONG_BREAK:
+                return "LongBreakOverrun.TimerMode.TLabel"
+            return "Overwork.TimerMode.TLabel"
         if mode == TimerMode.SHORT_BREAK:
             return "ShortBreak.TimerMode.TLabel"
         if mode == TimerMode.LONG_BREAK:
@@ -333,14 +553,17 @@ class ThemeManager:
             ("Work.TimerMode.TLabel", palette.work),
             ("ShortBreak.TimerMode.TLabel", palette.short_break),
             ("LongBreak.TimerMode.TLabel", palette.long_break),
-            ("Overrun.TimerMode.TLabel", palette.overrun),
+            ("Overwork.TimerMode.TLabel", palette.overwork),
+            ("ShortBreakOverrun.TimerMode.TLabel", palette.short_break_overrun),
+            ("LongBreakOverrun.TimerMode.TLabel", palette.long_break_overrun),
+            ("Overrun.TimerMode.TLabel", palette.overwork),
         ):
             self.style.configure(style_name, background=palette.card_background, foreground=color)
 
         self._configure_button(
             "TButton",
-            palette.secondary_background,
-            palette.text_primary,
+            palette.button_background,
+            palette.button_text,
             palette.border,
         )
         self._configure_button("Accent.TButton", palette.accent, palette.on_accent, palette.accent_hover)
@@ -502,6 +725,12 @@ class ThemeManager:
                         relief=tk.FLAT,
                         borderwidth=0,
                         highlightthickness=1,
+                    )
+                elif isinstance(child, tk.Canvas):
+                    child.configure(
+                        background=palette.background,
+                        highlightbackground=palette.border,
+                        highlightcolor=palette.focus,
                     )
                 elif isinstance(child, tk.Toplevel):
                     child.configure(background=palette.background)

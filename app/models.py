@@ -41,6 +41,7 @@ class TimerProfile:
     close_to_tray: bool = True
     theme_name: str = "Comet"
     appearance_mode: str = "light"
+    custom_theme: dict[str, dict[str, str]] = field(default_factory=dict)
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"
@@ -75,6 +76,7 @@ class AppSettings:
     close_to_tray: bool = True
     theme_name: str = "Comet"
     appearance_mode: str = "light"
+    custom_theme: dict[str, dict[str, str]] = field(default_factory=dict)
     widget_enabled: bool = False
     widget_type: str = "Компактный"
     widget_size: str = "Маленький"

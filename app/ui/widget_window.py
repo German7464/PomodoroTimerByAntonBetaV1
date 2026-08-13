@@ -134,7 +134,7 @@ class WidgetView:
         )
         self.mode_label.configure(fg=state_color)
         self.time_label.configure(
-            fg=self.palette.overrun
+            fg=state_color
             if self.timer.state.waiting_for_continue
             else self.palette.text_primary,
         )
@@ -560,7 +560,11 @@ class WidgetWindow:
             return self.theme_manager.palette
         from app.theme import get_palette
 
-        return get_palette(self.settings.theme_name, self.settings.appearance_mode)
+        return get_palette(
+            self.settings.theme_name,
+            self.settings.appearance_mode,
+            self.settings.custom_theme,
+        )
 
     def _fit_window_to_content(self) -> None:
         """Не дает DPI и длинным названиям обрезать элементы, не меняя пресет."""

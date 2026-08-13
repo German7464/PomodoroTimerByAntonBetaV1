@@ -13,8 +13,10 @@ from app.storage import load_app_settings, save_app_settings
 from app.theme import (
     APPEARANCE_DARK,
     APPEARANCE_LIGHT,
+    CUSTOM_THEME_NAME,
     ThemeManager,
     Tooltip,
+    normalize_custom_theme,
     normalize_appearance_mode,
     normalize_theme_name,
 )
@@ -40,6 +42,7 @@ class MainWindow:
         self.theme_manager.apply(
             self.settings.theme_name,
             self.settings.appearance_mode,
+            self.settings.custom_theme,
         )
         self.autostart = AutostartService()
 
@@ -91,6 +94,10 @@ class MainWindow:
             self.apply_settings,
             self.autostart.status(),
             on_theme_change=self.apply_theme_selection,
+            on_custom_theme_preview=self.preview_custom_theme,
+            on_custom_theme_apply=self.apply_custom_theme,
+            on_theme_preview_cancel=self.cancel_theme_preview,
+            theme_manager=self.theme_manager,
         )
         notebook.add(self.settings_view, text="Настройки")
 
@@ -256,6 +263,7 @@ class MainWindow:
         self.apply_theme_selection(
             settings.theme_name,
             settings.appearance_mode,
+            custom_theme=settings.custom_theme,
             persist=False,
         )
         self.timer.update_settings(settings)
@@ -339,18 +347,24 @@ class MainWindow:
         theme_name: str,
         appearance_mode: str,
         *,
+        custom_theme: object = None,
         persist: bool = True,
     ) -> bool:
         """Применяет тему ко всем открытым окнам и сохраняет только реальный выбор."""
         normalized_theme = normalize_theme_name(theme_name)
         normalized_mode = normalize_appearance_mode(appearance_mode)
+        normalized_custom = normalize_custom_theme(
+            self.settings.custom_theme if custom_theme is None else custom_theme,
+        )
         changed = (
             self.settings.theme_name != normalized_theme
             or self.settings.appearance_mode != normalized_mode
+            or self.settings.custom_theme != normalized_custom
         )
         self.settings.theme_name = normalized_theme
         self.settings.appearance_mode = normalized_mode
-        self.theme_manager.apply(normalized_theme, normalized_mode)
+        self.settings.custom_theme = normalized_custom
+        self.theme_manager.apply(normalized_theme, normalized_mode, normalized_custom)
         if hasattr(self, "settings_view"):
             self.settings_view.sync_theme(normalized_theme, normalized_mode)
         self._sync_theme_button()
@@ -364,6 +378,49 @@ class MainWindow:
         if changed and persist:
             save_app_settings(SETTINGS_FILE, self.settings)
         return changed
+
+    def preview_custom_theme(
+        self,
+        custom_theme: dict[str, dict[str, str]],
+        appearance_mode: str,
+    ) -> None:
+        """Временно оформляет все окна черновиком без изменения настроек и JSON."""
+        normalized_mode = normalize_appearance_mode(appearance_mode)
+        self.theme_manager.apply(CUSTOM_THEME_NAME, normalized_mode, custom_theme)
+        if hasattr(self, "mode_label"):
+            self.mode_label.config(
+                style=self.theme_manager.mode_style(
+                    self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
+            )
+
+    def apply_custom_theme(
+        self,
+        custom_theme: dict[str, dict[str, str]],
+        appearance_mode: str,
+    ) -> None:
+        """Сохраняет подтверждённую пользовательскую копию одним действием."""
+        self.apply_theme_selection(
+            CUSTOM_THEME_NAME,
+            appearance_mode,
+            custom_theme=custom_theme,
+        )
+
+    def cancel_theme_preview(self) -> None:
+        """Возвращает сохранённое оформление после отмены редактора."""
+        self.theme_manager.apply(
+            self.settings.theme_name,
+            self.settings.appearance_mode,
+            self.settings.custom_theme,
+        )
+        if hasattr(self, "mode_label"):
+            self.mode_label.config(
+                style=self.theme_manager.mode_style(
+                    self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
+            )
 
     def _sync_theme_button(self) -> None:
         """Обновляет понятный текст и подсказку быстрого переключателя."""

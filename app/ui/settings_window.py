@@ -17,11 +17,14 @@ from app.theme import (
     APPEARANCE_DARK,
     APPEARANCE_LABELS,
     APPEARANCE_LIGHT,
+    CUSTOM_THEME_NAME,
     THEME_NAMES,
+    ThemeManager,
     get_palette,
     normalize_appearance_mode,
     normalize_theme_name,
 )
+from app.ui.theme_editor import CustomThemeEditor
 from app.widget_settings import (
     DEFAULT_WIDGET_X,
     DEFAULT_WIDGET_Y,
@@ -43,6 +46,10 @@ class SettingsView(ttk.Frame):
         on_save: Callable[[AppSettings, bool], None],
         autostart_status: str = AUTOSTART_DISABLED,
         on_theme_change: Callable[[str, str], None] | None = None,
+        on_custom_theme_preview: Callable[[dict[str, dict[str, str]], str], None] | None = None,
+        on_custom_theme_apply: Callable[[dict[str, dict[str, str]], str], None] | None = None,
+        on_theme_preview_cancel: Callable[[], None] | None = None,
+        theme_manager: ThemeManager | None = None,
     ) -> None:
         """Создает вкладку настроек и загружает профили."""
         super().__init__(parent, padding=12)
@@ -50,6 +57,11 @@ class SettingsView(ttk.Frame):
         self.personal_settings = settings
         self.on_save = on_save
         self.on_theme_change = on_theme_change
+        self.on_custom_theme_preview = on_custom_theme_preview
+        self.on_custom_theme_apply = on_custom_theme_apply
+        self.on_theme_preview_cancel = on_theme_preview_cancel
+        self.theme_manager = theme_manager
+        self.theme_editor: CustomThemeEditor | None = None
         self.autostart_status = autostart_status
         self.profiles = ProfilesService(PROFILES_FILE)
 
@@ -71,6 +83,7 @@ class SettingsView(ttk.Frame):
         self.long_break_end_message_var = tk.StringVar(value=settings.long_break_end_message)
         self.theme_name_var = tk.StringVar(value=settings.theme_name)
         self.appearance_mode_var = tk.StringVar(value=settings.appearance_mode)
+        self.custom_theme = deepcopy(settings.custom_theme)
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
@@ -123,7 +136,7 @@ class SettingsView(ttk.Frame):
         ttk.Label(parent, text="Цветовая тема", style="Heading.TLabel").grid(
             row=0,
             column=0,
-            columnspan=3,
+            columnspan=2,
             sticky=tk.W,
             pady=(0, 12),
         )
@@ -131,10 +144,13 @@ class SettingsView(ttk.Frame):
             "Comet": "Нейтральная и спокойная",
             "Aurora": "Холодная с сине-фиолетовым акцентом",
             "Warm": "Мягкая тёплая палитра",
+            CUSTOM_THEME_NAME: "Ваша светлая и тёмная палитры",
         }
-        for column, theme_name in enumerate(THEME_NAMES):
+        for index, theme_name in enumerate(THEME_NAMES):
+            row = 1 + index // 2
+            column = index % 2
             card = ttk.LabelFrame(parent, text=theme_name, padding=12)
-            card.grid(row=1, column=column, sticky=tk.NSEW, padx=(0, 10), pady=(0, 16))
+            card.grid(row=row, column=column, sticky=tk.NSEW, padx=(0, 10), pady=(0, 10))
             ttk.Radiobutton(
                 card,
                 text="Выбрать",
@@ -160,7 +176,7 @@ class SettingsView(ttk.Frame):
             parent.columnconfigure(column, weight=1)
 
         mode_card = ttk.Frame(parent, style="Card.TFrame", padding=14)
-        mode_card.grid(row=2, column=0, columnspan=3, sticky=tk.EW)
+        mode_card.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=(6, 0))
         ttk.Label(mode_card, text="Режим:", style="Card.TLabel").pack(side=tk.LEFT, padx=(0, 12))
         for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
             ttk.Radiobutton(
@@ -171,11 +187,17 @@ class SettingsView(ttk.Frame):
                 command=self._on_theme_selection,
                 style="Card.TRadiobutton",
             ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(
+            mode_card,
+            text="Настроить цвета",
+            command=self._open_theme_editor,
+            style="Accent.TButton",
+        ).pack(side=tk.RIGHT)
         ttk.Label(
             parent,
             text="Тема применяется сразу ко всем открытым окнам и не влияет на таймер.",
             style="Secondary.TLabel",
-        ).grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=(12, 0))
+        ).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(12, 0))
         self._refresh_theme_previews()
 
     def _build_time_settings(self, parent: ttk.Frame) -> None:
@@ -344,7 +366,7 @@ class SettingsView(ttk.Frame):
         """Показывает четыре смысловых цвета каждой темы в активном режиме."""
         mode = normalize_appearance_mode(self.appearance_mode_var.get())
         for theme_name, (preview, swatches) in self.theme_previews.items():
-            palette = get_palette(theme_name, mode)
+            palette = get_palette(theme_name, mode, self.custom_theme)
             preview.configure(background=palette.card_background)
             colors = (
                 palette.background,
@@ -354,6 +376,44 @@ class SettingsView(ttk.Frame):
             )
             for swatch, color in zip(swatches, colors, strict=True):
                 swatch.configure(background=color)
+
+    def _open_theme_editor(self) -> None:
+        """Открывает один редактор пользовательской копии палитр."""
+        if self.theme_editor is not None and self.theme_editor.is_open():
+            self.theme_editor.focus()
+            return
+        if (
+            self.theme_manager is None
+            or self.on_custom_theme_preview is None
+            or self.on_custom_theme_apply is None
+            or self.on_theme_preview_cancel is None
+        ):
+            messagebox.showwarning(
+                "Пользовательская тема",
+                "Редактор цветов недоступен в этом окне.",
+            )
+            return
+        self.theme_editor = CustomThemeEditor(
+            self,
+            self.custom_theme,
+            self.appearance_mode_var.get(),
+            self.on_custom_theme_preview,
+            self._apply_custom_theme_from_editor,
+            self.on_theme_preview_cancel,
+            self.theme_manager,
+        )
+
+    def _apply_custom_theme_from_editor(
+        self,
+        custom_theme: dict[str, dict[str, str]],
+        appearance_mode: str,
+    ) -> None:
+        """Синхронизирует сохранённую копию и передаёт её общему контроллеру."""
+        self.custom_theme = deepcopy(custom_theme)
+        self.theme_name_var.set(CUSTOM_THEME_NAME)
+        self.appearance_mode_var.set(appearance_mode)
+        self.on_custom_theme_apply(custom_theme, appearance_mode)
+        self._refresh_theme_previews()
 
     def _autostart_status_text(self) -> str:
         """Возвращает понятное описание текущего состояния автозапуска."""
@@ -501,6 +561,7 @@ class SettingsView(ttk.Frame):
             close_to_tray=self.close_to_tray_var.get(),
             theme_name=normalize_theme_name(self.theme_name_var.get()),
             appearance_mode=normalize_appearance_mode(self.appearance_mode_var.get()),
+            custom_theme=deepcopy(self.custom_theme),
             widget_enabled=self.settings.widget_enabled,
             widget_type=widget_type,
             widget_size=self.widget_size_var.get(),
@@ -533,6 +594,7 @@ class SettingsView(ttk.Frame):
         self.long_break_end_message_var.set(settings.long_break_end_message)
         self.theme_name_var.set(settings.theme_name)
         self.appearance_mode_var.set(settings.appearance_mode)
+        self.custom_theme = deepcopy(settings.custom_theme)
         self.widget_type_var.set(settings.widget_type)
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
