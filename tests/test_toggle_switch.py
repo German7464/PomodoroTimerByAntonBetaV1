@@ -42,7 +42,8 @@ class ToggleSwitchSourceContractTests(unittest.TestCase):
         self.assertNotIn("ttk.Checkbutton", settings_source)
         self.assertGreaterEqual(settings_source.count("self._add_toggle("), 11)
         self.assertIn('text="Отображать виджет"', main_source)
-        self.assertIn("ToggleSwitch(", main_source)
+        self.assertIn('text="Тёмный режим"', main_source)
+        self.assertGreaterEqual(main_source.count("ToggleSwitch("), 2)
         for command_label in (
             "Старт",
             "Пауза",

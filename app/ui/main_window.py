@@ -20,7 +20,6 @@ from app.theme import (
     APPEARANCE_LIGHT,
     CUSTOM_THEME_NAME,
     ThemeManager,
-    Tooltip,
     normalize_custom_theme,
     normalize_appearance_mode,
     normalize_theme_name,
@@ -48,6 +47,9 @@ class MainWindow:
 
         self.settings = load_app_settings(SETTINGS_FILE)
         self.widget_enabled_var = tk.BooleanVar(value=self.settings.widget_enabled)
+        self.appearance_dark_var = tk.BooleanVar(
+            value=self.settings.appearance_mode == APPEARANCE_DARK,
+        )
         self.theme_manager = ThemeManager(self.root)
         self.theme_manager.apply(
             self.settings.theme_name,
@@ -125,17 +127,17 @@ class MainWindow:
         toolbar = ttk.Frame(timer_tab, style="Toolbar.TFrame")
         toolbar.pack(fill=tk.X, pady=(0, 16))
         ttk.Label(toolbar, text="Фокус-сессия", style="Heading.TLabel").pack(side=tk.LEFT)
-        self.theme_toggle_button = ttk.Button(
+        self.appearance_mode_switch = ToggleSwitch(
             toolbar,
-            command=self.toggle_appearance_mode,
-            style="Ghost.TButton",
+            text="Тёмный режим",
+            variable=self.appearance_dark_var,
+            command=self.set_dark_appearance,
+            theme_manager=self.theme_manager,
+            animations_enabled=lambda: bool(
+                self.settings.overrun_visual.get("animations_enabled", True)
+            ),
         )
-        self.theme_toggle_button.pack(side=tk.RIGHT)
-        self.theme_toggle_tooltip = Tooltip(
-            self.theme_toggle_button,
-            "Переключить светлый или тёмный режим",
-            self.theme_manager,
-        )
+        self.appearance_mode_switch.pack(side=tk.RIGHT)
 
         palette = self.theme_manager.palette
         self.timer_border = tk.Frame(
@@ -272,7 +274,7 @@ class MainWindow:
             pady=(12, 0),
         )
 
-        self._sync_theme_button()
+        self._sync_appearance_switch()
         self.set_widget_visibility(self.settings.widget_enabled, persist=False)
         self.apply_theme_selection(
             self.settings.theme_name,
@@ -413,14 +415,10 @@ class MainWindow:
         self._sync_timer_buttons()
         self._refresh_labels()
 
-    def toggle_appearance_mode(self) -> None:
-        """Быстро переключает светлый/тёмный режим общей активной темы."""
-        next_mode = (
-            APPEARANCE_LIGHT
-            if self.settings.appearance_mode == APPEARANCE_DARK
-            else APPEARANCE_DARK
-        )
-        self.apply_theme_selection(self.settings.theme_name, next_mode)
+    def set_dark_appearance(self, enabled: bool) -> None:
+        """Выбирает светлый или тёмный режим через общий переключатель."""
+        appearance_mode = APPEARANCE_DARK if enabled else APPEARANCE_LIGHT
+        self.apply_theme_selection(self.settings.theme_name, appearance_mode)
 
     def apply_theme_selection(
         self,
@@ -447,7 +445,7 @@ class MainWindow:
         self.theme_manager.apply(normalized_theme, normalized_mode, normalized_custom)
         if hasattr(self, "settings_view"):
             self.settings_view.sync_theme(normalized_theme, normalized_mode)
-        self._sync_theme_button()
+        self._sync_appearance_switch()
         if hasattr(self, "mode_label"):
             self.mode_label.config(
                 style=self.theme_manager.mode_style(
@@ -567,18 +565,12 @@ class MainWindow:
         self._cancel_deferred_settings_save()
         save_app_settings(SETTINGS_FILE, self.settings)
 
-    def _sync_theme_button(self) -> None:
-        """Обновляет понятный текст и подсказку быстрого переключателя."""
-        if not hasattr(self, "theme_toggle_button"):
+    def _sync_appearance_switch(self) -> None:
+        """Синхронизирует переключатель с общим строковым режимом темы."""
+        if not hasattr(self, "appearance_mode_switch"):
             return
         dark_is_active = self.settings.appearance_mode == APPEARANCE_DARK
-        target_label = "Светлый режим" if dark_is_active else "Тёмный режим"
-        self.theme_toggle_button.config(text=target_label)
-        if hasattr(self, "theme_toggle_tooltip"):
-            self.theme_toggle_tooltip.text = (
-                f"Переключить на {target_label.lower()}. "
-                f"Текущая тема: {self.settings.theme_name}."
-            )
+        self.appearance_mode_switch.set(dark_is_active)
 
     def set_widget_visibility(self, visible: bool, *, persist: bool = True) -> bool:
         """Применяет, сохраняет и отражает единое состояние видимости виджета."""

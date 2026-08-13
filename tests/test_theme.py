@@ -80,12 +80,12 @@ def contrast_ratio(first: str, second: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
-class FakeButton:
+class FakeToggle:
     def __init__(self) -> None:
-        self.text = ""
+        self.value = False
 
-    def config(self, **values: str) -> None:
-        self.text = values.get("text", self.text)
+    def set(self, value: bool) -> None:
+        self.value = bool(value)
 
 
 class FakeLabel:
@@ -360,7 +360,7 @@ class ThemeTests(unittest.TestCase):
             window.timer = TimerEngine(window.settings)
             window.theme_manager = FakeThemeManager()
             window.settings_view = FakeSettingsView()
-            window.theme_toggle_button = FakeButton()
+            window.appearance_mode_switch = FakeToggle()
             window.mode_label = FakeLabel()
 
             with (
@@ -369,12 +369,12 @@ class ThemeTests(unittest.TestCase):
             ):
                 window.apply_theme_selection("Aurora", APPEARANCE_DARK)
                 window.apply_theme_selection("Aurora", APPEARANCE_DARK)
-                window.toggle_appearance_mode()
+                window.set_dark_appearance(False)
 
             self.assertEqual(window.settings.theme_name, "Aurora")
             self.assertEqual(window.settings.appearance_mode, APPEARANCE_LIGHT)
             self.assertEqual(window.settings_view.calls[-1], ("Aurora", APPEARANCE_LIGHT))
-            self.assertEqual(window.theme_toggle_button.text, "Тёмный режим")
+            self.assertFalse(window.appearance_mode_switch.value)
             self.assertEqual(save.call_count, 2)
             restored = load_app_settings(path)
             self.assertEqual(restored.theme_name, "Aurora")
