@@ -10,7 +10,12 @@ from app.timer_engine import TimerEngine
 from app.ui.widget_window import (
     CompactWidgetView,
     ExpandedWidgetView,
+    MicroWidgetView,
     MinimalWidgetView,
+    RingWidgetView,
+    RowWidgetView,
+    ScoreboardWidgetView,
+    ring_progress,
     widget_display_state,
     widget_view_class,
 )
@@ -25,7 +30,12 @@ from app.widget_settings import (
     WIDGET_SIZE_SMALL,
     WIDGET_TYPE_COMPACT,
     WIDGET_TYPE_EXPANDED,
+    WIDGET_TYPE_MICRO,
     WIDGET_TYPE_MINIMAL,
+    WIDGET_TYPE_RING,
+    WIDGET_TYPE_ROW,
+    WIDGET_TYPE_SCOREBOARD,
+    WIDGET_TYPES,
     clamp_window_position,
     content_fitted_dimensions,
     default_widget_layouts,
@@ -75,10 +85,20 @@ class WidgetSettingsTests(unittest.TestCase):
             self.assertEqual(settings.widget_size, WIDGET_SIZE_SMALL)
             self.assertEqual(settings.widget_layouts, default_widget_layouts())
 
-    def test_all_three_types_select_distinct_view_classes(self) -> None:
-        self.assertIs(widget_view_class(WIDGET_TYPE_MINIMAL), MinimalWidgetView)
-        self.assertIs(widget_view_class(WIDGET_TYPE_COMPACT), CompactWidgetView)
-        self.assertIs(widget_view_class(WIDGET_TYPE_EXPANDED), ExpandedWidgetView)
+    def test_all_seven_types_select_distinct_view_classes(self) -> None:
+        expected = {
+            WIDGET_TYPE_MINIMAL: MinimalWidgetView,
+            WIDGET_TYPE_COMPACT: CompactWidgetView,
+            WIDGET_TYPE_EXPANDED: ExpandedWidgetView,
+            WIDGET_TYPE_MICRO: MicroWidgetView,
+            WIDGET_TYPE_ROW: RowWidgetView,
+            WIDGET_TYPE_RING: RingWidgetView,
+            WIDGET_TYPE_SCOREBOARD: ScoreboardWidgetView,
+        }
+        self.assertEqual(len(WIDGET_TYPES), 7)
+        for widget_type, view_class in expected.items():
+            with self.subTest(widget_type=widget_type):
+                self.assertIs(widget_view_class(widget_type), view_class)
         self.assertIs(widget_view_class("bad"), CompactWidgetView)
 
     def test_small_medium_large_have_expected_parameters_for_each_type(self) -> None:
@@ -145,11 +165,7 @@ class WidgetSettingsTests(unittest.TestCase):
         before = asdict(timer.state)
         layouts = default_widget_layouts()
 
-        for widget_type in (
-            WIDGET_TYPE_MINIMAL,
-            WIDGET_TYPE_COMPACT,
-            WIDGET_TYPE_EXPANDED,
-        ):
+        for widget_type in WIDGET_TYPES:
             layouts = set_widget_layout_size(layouts, widget_type, WIDGET_SIZE_MEDIUM)
             widget_view_class(widget_type)
 
@@ -178,14 +194,18 @@ class WidgetSettingsTests(unittest.TestCase):
         self.assertEqual(overrun.formatted_time, "+00:00:01")
         self.assertEqual(overrun.primary_text, "Продолжить")
 
-        for widget_type in (
-            WIDGET_TYPE_MINIMAL,
-            WIDGET_TYPE_COMPACT,
-            WIDGET_TYPE_EXPANDED,
-        ):
+        for widget_type in WIDGET_TYPES:
             with self.subTest(widget_type=widget_type):
                 self.assertIsNotNone(widget_view_class(widget_type))
                 self.assertTrue(overrun.waiting_for_continue)
+
+    def test_ring_uses_separate_overrun_mode_instead_of_more_than_full(self) -> None:
+        timer = TimerEngine(make_settings())
+        self.assertEqual(ring_progress(timer), 0.0)
+        timer.state.remaining_seconds = -500
+        self.assertEqual(ring_progress(timer), 1.0)
+        timer.state.waiting_for_continue = True
+        self.assertIsNone(ring_progress(timer))
 
 
 if __name__ == "__main__":

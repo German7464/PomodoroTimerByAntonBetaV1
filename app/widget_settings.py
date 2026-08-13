@@ -8,11 +8,29 @@ from typing import Any
 WIDGET_TYPE_MINIMAL = "Минималистичный"
 WIDGET_TYPE_COMPACT = "Компактный"
 WIDGET_TYPE_EXPANDED = "Расширенный"
+WIDGET_TYPE_MICRO = "Микро"
+WIDGET_TYPE_ROW = "Строка"
+WIDGET_TYPE_RING = "Кольцо"
+WIDGET_TYPE_SCOREBOARD = "Табло"
 WIDGET_TYPES = (
     WIDGET_TYPE_MINIMAL,
     WIDGET_TYPE_COMPACT,
     WIDGET_TYPE_EXPANDED,
+    WIDGET_TYPE_MICRO,
+    WIDGET_TYPE_ROW,
+    WIDGET_TYPE_RING,
+    WIDGET_TYPE_SCOREBOARD,
 )
+
+WIDGET_TYPE_DESCRIPTIONS = {
+    WIDGET_TYPE_MINIMAL: "Крупное время, название состояния и минимум деталей.",
+    WIDGET_TYPE_COMPACT: "Классическая компактная карточка с основной кнопкой.",
+    WIDGET_TYPE_EXPANDED: "Цикл и полный набор основных команд таймера.",
+    WIDGET_TYPE_MICRO: "Самое маленькое окно: обычно только время.",
+    WIDGET_TYPE_ROW: "Горизонтальная строка для края экрана.",
+    WIDGET_TYPE_RING: "Время внутри кольцевого индикатора периода.",
+    WIDGET_TYPE_SCOREBOARD: "Крупные моноширинные цифры в стиле спокойного табло.",
+}
 
 WIDGET_SIZE_SMALL = "Маленький"
 WIDGET_SIZE_MEDIUM = "Средний"
@@ -29,7 +47,7 @@ DEFAULT_WIDGET_TYPE = WIDGET_TYPE_COMPACT
 DEFAULT_WIDGET_SIZE = WIDGET_SIZE_SMALL
 DEFAULT_WIDGET_X = 100
 DEFAULT_WIDGET_Y = 100
-MIN_WIDGET_OPACITY = 70
+MIN_WIDGET_OPACITY = 5
 
 
 @dataclass(frozen=True)
@@ -59,13 +77,42 @@ WIDGET_SIZE_PRESETS: dict[str, dict[str, WidgetSizeParameters]] = {
         WIDGET_SIZE_MEDIUM: WidgetSizeParameters(440, 280, 44, 12, 10),
         WIDGET_SIZE_LARGE: WidgetSizeParameters(560, 350, 58, 14, 12),
     },
+    WIDGET_TYPE_MICRO: {
+        WIDGET_SIZE_SMALL: WidgetSizeParameters(170, 96, 24, 8, 8),
+        WIDGET_SIZE_MEDIUM: WidgetSizeParameters(220, 122, 32, 9, 9),
+        WIDGET_SIZE_LARGE: WidgetSizeParameters(285, 158, 42, 10, 10),
+    },
+    WIDGET_TYPE_ROW: {
+        WIDGET_SIZE_SMALL: WidgetSizeParameters(360, 100, 24, 9, 8),
+        WIDGET_SIZE_MEDIUM: WidgetSizeParameters(460, 126, 34, 10, 9),
+        WIDGET_SIZE_LARGE: WidgetSizeParameters(590, 158, 46, 12, 10),
+    },
+    WIDGET_TYPE_RING: {
+        WIDGET_SIZE_SMALL: WidgetSizeParameters(220, 250, 24, 9, 8),
+        WIDGET_SIZE_MEDIUM: WidgetSizeParameters(290, 325, 34, 10, 9),
+        WIDGET_SIZE_LARGE: WidgetSizeParameters(380, 420, 46, 12, 10),
+    },
+    WIDGET_TYPE_SCOREBOARD: {
+        WIDGET_SIZE_SMALL: WidgetSizeParameters(300, 145, 34, 9, 8),
+        WIDGET_SIZE_MEDIUM: WidgetSizeParameters(405, 190, 48, 10, 9),
+        WIDGET_SIZE_LARGE: WidgetSizeParameters(525, 240, 64, 12, 10),
+    },
 }
 
 WIDGET_MIN_SIZES: dict[str, tuple[int, int]] = {
     WIDGET_TYPE_MINIMAL: (180, 100),
     WIDGET_TYPE_COMPACT: (230, 135),
     WIDGET_TYPE_EXPANDED: (330, 205),
+    WIDGET_TYPE_MICRO: (160, 88),
+    WIDGET_TYPE_ROW: (340, 90),
+    WIDGET_TYPE_RING: (205, 230),
+    WIDGET_TYPE_SCOREBOARD: (280, 130),
 }
+
+
+def normalize_widget_opacity(value: Any, default: int = 100) -> int:
+    """Ограничивает постоянную непрозрачность диапазоном 5–100 процентов."""
+    return _bounded_int(value, default, MIN_WIDGET_OPACITY, 100)
 
 
 def normalize_widget_type(value: Any) -> str:

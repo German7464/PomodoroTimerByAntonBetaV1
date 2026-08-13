@@ -44,6 +44,7 @@ from app.widget_settings import (
     DEFAULT_WIDGET_Y,
     MIN_WIDGET_OPACITY,
     WIDGET_SIZES,
+    WIDGET_TYPE_DESCRIPTIONS,
     WIDGET_TYPES,
     normalize_widget_layouts,
     set_widget_layout_size,
@@ -115,6 +116,9 @@ class SettingsView(ttk.Frame):
             for key in (OVERWORK_KEY, SHORT_BREAK_OVERRUN_KEY, LONG_BREAK_OVERRUN_KEY)
         }
         self.widget_type_var = tk.StringVar(value=settings.widget_type)
+        self.widget_type_description_var = tk.StringVar(
+            value=WIDGET_TYPE_DESCRIPTIONS[settings.widget_type],
+        )
         self.widget_size_var = tk.StringVar(value=settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
         self.widget_opacity_var = tk.IntVar(value=settings.widget_opacity)
@@ -399,6 +403,12 @@ class SettingsView(ttk.Frame):
         )
         type_box.grid(row=0, column=1, sticky=tk.W, pady=6)
         type_box.bind("<<ComboboxSelected>>", self._on_widget_type_selected)
+        ttk.Label(
+            parent,
+            textvariable=self.widget_type_description_var,
+            style="Secondary.TLabel",
+            wraplength=430,
+        ).grid(row=0, column=2, sticky=tk.W, padx=(12, 0), pady=6)
         ttk.Label(parent, text="Размер виджета:").grid(row=1, column=0, sticky=tk.W, pady=6)
         size_box = ttk.Combobox(
             parent,
@@ -840,6 +850,9 @@ class SettingsView(ttk.Frame):
         )
         self.overrun_color_overrides = deepcopy(self.overrun_visual["colors"])
         self.widget_type_var.set(settings.widget_type)
+        self.widget_type_description_var.set(
+            WIDGET_TYPE_DESCRIPTIONS[settings.widget_type],
+        )
         self.widget_size_var.set(settings.widget_size)
         self.widget_layouts = deepcopy(settings.widget_layouts)
         self.widget_opacity_var.set(settings.widget_opacity)
@@ -866,6 +879,7 @@ class SettingsView(ttk.Frame):
         """Восстанавливает сохраненный размер выбранного типа."""
         widget_type = self.widget_type_var.get()
         self.widget_size_var.set(str(self.widget_layouts[widget_type]["size"]))
+        self.widget_type_description_var.set(WIDGET_TYPE_DESCRIPTIONS[widget_type])
 
     def _on_widget_size_selected(self, _event: tk.Event) -> None:
         """Запоминает пресет размера отдельно для текущего типа."""

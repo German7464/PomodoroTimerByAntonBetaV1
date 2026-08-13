@@ -14,7 +14,11 @@ from app.widget_settings import (
     WIDGET_SIZE_CUSTOM,
     WIDGET_TYPE_COMPACT,
     WIDGET_TYPE_EXPANDED,
+    WIDGET_TYPE_MICRO,
     WIDGET_TYPE_MINIMAL,
+    WIDGET_TYPE_RING,
+    WIDGET_TYPE_ROW,
+    WIDGET_TYPE_SCOREBOARD,
     WidgetSizeParameters,
     clamp_window_position,
     content_fitted_dimensions,
@@ -37,7 +41,7 @@ class WidgetActions:
 
 @dataclass(frozen=True)
 class WidgetDisplayState:
-    """Единая модель отображения для всех трех разметок."""
+    """Единая модель отображения для всех семи разметок."""
 
     mode_name: str
     formatted_time: str
@@ -63,6 +67,15 @@ def widget_display_state(timer: TimerEngine) -> WidgetDisplayState:
         waiting_for_continue=timer.state.waiting_for_continue,
         primary_text=primary_text,
     )
+
+
+def ring_progress(timer: TimerEngine) -> float | None:
+    """Возвращает ход периода 0..1 или отдельный режим превышения."""
+    if timer.state.waiting_for_continue:
+        return None
+    duration = max(1, timer.current_period_duration_seconds())
+    elapsed = duration - timer.state.remaining_seconds
+    return min(1.0, max(0.0, elapsed / duration))
 
 
 class WidgetView:
@@ -361,10 +374,216 @@ class ExpandedWidgetView(WidgetView):
         )
 
 
+class MicroWidgetView(WidgetView):
+    """Самый маленький вид: обычный период показывает только время."""
+
+    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
+        super().__init__(parent, timer, actions)
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(1, weight=1)
+        self.mode_label = tk.Label(
+            self.frame,
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+            wraplength=250,
+        )
+        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=8, pady=(5, 0))
+        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
+        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=8, pady=2)
+        self.continue_button = self._button(
+            self.frame,
+            "Продолжить",
+            self.actions.continue_period,
+            accent=True,
+        )
+        self.continue_button.grid(row=2, column=0, padx=8, pady=(0, 6), ipadx=6)
+        self.drag_widgets.extend((self.mode_label, self.time_label))
+        self._sync_overrun_controls(False)
+
+    def update(self) -> None:
+        super().update()
+        self._sync_overrun_controls(widget_display_state(self.timer).waiting_for_continue)
+
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        super().apply_overrun_visual(frame)
+        self._sync_overrun_controls(frame.active)
+
+    def _sync_overrun_controls(self, active: bool) -> None:
+        if active:
+            self.mode_label.grid()
+            self.continue_button.grid()
+        else:
+            self.mode_label.grid_remove()
+            self.continue_button.grid_remove()
+
+
+class RowWidgetView(WidgetView):
+    """Горизонтальный вид с состоянием, временем и одной общей командой."""
+
+    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
+        super().__init__(parent, timer, actions)
+        self.frame.rowconfigure(0, weight=1)
+        self.frame.columnconfigure(0, weight=2)
+        self.frame.columnconfigure(1, weight=3)
+        self.frame.columnconfigure(2, weight=1)
+        self.mode_label = tk.Label(
+            self.frame,
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=190,
+        )
+        self.mode_label.grid(row=0, column=0, sticky=tk.NSEW, padx=(12, 6), pady=8)
+        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
+        self.time_label.grid(row=0, column=1, sticky=tk.NSEW, padx=6, pady=8)
+        self.primary_button = self._button(
+            self.frame,
+            "Старт",
+            self._handle_primary,
+            accent=True,
+        )
+        self.primary_button.grid(row=0, column=2, sticky=tk.E, padx=(6, 12), pady=8)
+        self.drag_widgets.extend((self.mode_label, self.time_label))
+
+    def update(self) -> None:
+        super().update()
+        self.primary_button.config(text=self._primary_text())
+
+
+class RingWidgetView(WidgetView):
+    """Кольцевая шкала текущего периода без отдельного источника времени."""
+
+    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
+        super().__init__(parent, timer, actions)
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(1, weight=1)
+        self.mode_label = tk.Label(
+            self.frame,
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+            wraplength=330,
+        )
+        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=10, pady=(8, 2))
+        self.ring_canvas = tk.Canvas(
+            self.frame,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.ring_canvas.grid(row=1, column=0, sticky=tk.NSEW, padx=12, pady=2)
+        self.time_label = tk.Label(self.ring_canvas, anchor=tk.CENTER)
+        self.time_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self.primary_button = self._button(
+            self.frame,
+            "Старт",
+            self._handle_primary,
+            accent=True,
+        )
+        self.primary_button.grid(row=2, column=0, padx=12, pady=(3, 9), ipadx=8)
+        self.ring_canvas.bind("<Configure>", self._redraw_ring)
+        self.drag_widgets.extend((self.mode_label, self.ring_canvas, self.time_label))
+
+    def update(self) -> None:
+        super().update()
+        self.primary_button.config(text=self._primary_text())
+        self._redraw_ring()
+
+    def apply_style(
+        self,
+        palette: ThemePalette,
+        parameters: WidgetSizeParameters,
+    ) -> None:
+        super().apply_style(palette, parameters)
+        self.ring_canvas.configure(bg=palette.card_background)
+        self._redraw_ring()
+
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        super().apply_overrun_visual(frame)
+        self._redraw_ring()
+
+    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
+        return super()._effect_background_widgets() + (self.ring_canvas,)
+
+    def _redraw_ring(self, _event: tk.Event | None = None) -> None:
+        if self.palette is None:
+            return
+        canvas = self.ring_canvas
+        canvas.delete("ring")
+        width = max(40, canvas.winfo_width())
+        height = max(40, canvas.winfo_height())
+        diameter = max(28, min(width, height) - 18)
+        left = (width - diameter) / 2
+        top = (height - diameter) / 2
+        bounds = (left, top, left + diameter, top + diameter)
+        line_width = max(4, round(diameter / 18))
+        canvas.create_oval(
+            *bounds,
+            outline=self.palette.secondary_background,
+            width=line_width,
+            tags="ring",
+        )
+        progress = None if self.overrun_frame.active else ring_progress(self.timer)
+        state_color = (
+            self.overrun_frame.digits_color
+            or mode_color(
+                self.palette,
+                self.overrun_frame.mode or self.timer.state.mode,
+                progress is None,
+            )
+        )
+        extent = -359.9 if progress is None else -359.9 * progress
+        if progress is None or progress > 0:
+            canvas.create_arc(
+                *bounds,
+                start=90,
+                extent=extent,
+                style=tk.ARC,
+                outline=state_color,
+                width=line_width,
+                tags="ring",
+            )
+
+
+class ScoreboardWidgetView(WidgetView):
+    """Контрастное табло с системным моноширинным шрифтом."""
+
+    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
+        super().__init__(parent, timer, actions)
+        self.frame.columnconfigure(0, weight=1)
+        self.frame.rowconfigure(1, weight=1)
+        self.mode_label = tk.Label(self.frame, anchor=tk.CENTER)
+        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=10, pady=(8, 0))
+        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
+        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=12, pady=2)
+        self.primary_button = self._button(
+            self.frame,
+            "Старт",
+            self._handle_primary,
+            accent=True,
+        )
+        self.primary_button.grid(row=2, column=0, padx=10, pady=(0, 8), ipadx=8)
+        self.drag_widgets.extend((self.mode_label, self.time_label))
+
+    def update(self) -> None:
+        super().update()
+        self.primary_button.config(text=self._primary_text())
+
+    def apply_style(
+        self,
+        palette: ThemePalette,
+        parameters: WidgetSizeParameters,
+    ) -> None:
+        super().apply_style(palette, parameters)
+        self.time_label.configure(font=("Consolas", parameters.time_font, "bold"))
+        self._apply_overrun_frame()
+
+
 WIDGET_VIEW_CLASSES: dict[str, type[WidgetView]] = {
     WIDGET_TYPE_MINIMAL: MinimalWidgetView,
     WIDGET_TYPE_COMPACT: CompactWidgetView,
     WIDGET_TYPE_EXPANDED: ExpandedWidgetView,
+    WIDGET_TYPE_MICRO: MicroWidgetView,
+    WIDGET_TYPE_ROW: RowWidgetView,
+    WIDGET_TYPE_RING: RingWidgetView,
+    WIDGET_TYPE_SCOREBOARD: ScoreboardWidgetView,
 }
 
 
