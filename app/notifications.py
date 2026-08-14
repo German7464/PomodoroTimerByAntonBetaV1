@@ -9,6 +9,7 @@ from app.models import AppSettings, TimerMode
 from app.theme import ThemeManager
 from app.ui.components import AppButton, Card
 from app.ui.design_system import TOKENS
+from app.ui.icons import application_icon
 
 try:
     import winsound
@@ -87,6 +88,7 @@ class NotificationService:
         window = QDialog(self.parent, Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
         self._active_window = window
         window.setWindowTitle("Pomodoro Timer")
+        window.setWindowIcon(application_icon())
         window.setModal(False)
         window.setMinimumWidth(410)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -112,6 +114,8 @@ class NotificationService:
         button.clicked.connect(handle_button)
         card.content_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(card)
+        if self.theme_manager is not None:
+            self.theme_manager.apply_to_window(window)
         window.finished.connect(lambda _result, target=window: self._clear_if_active(target))
         window.show()
         window.raise_()

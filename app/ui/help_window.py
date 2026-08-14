@@ -4,6 +4,8 @@ from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout, QWidget
 
 from app.ui.components import PageHeader
 from app.ui.design_system import TOKENS
+from app.ui.icons import application_icon
+from app.ui.qt_app import fit_window_to_available_screen
 
 
 HELP_TEXT = """# Pomodoro Timer
@@ -40,6 +42,16 @@ HELP_TEXT = """# Pomodoro Timer
 Интерфейс построен на Qt Widgets, масштабируется средствами Windows/Qt и
 поддерживает клавиатурный фокус. Переключатели меняются мышью, `Пробелом` или
 `Enter`; их состояние видно по положению, цвету и тексту `ВКЛ/ВЫКЛ`.
+
+Главное окно при первом запуске занимает около 80% доступной области экрана,
+запоминает размер и положение и возвращается на видимый монитор после смены
+разрешения. На среднем и узком окне навигация сворачивается до иконок с
+подсказками, группы кнопок переносятся строками, а содержимое настроек
+прокручивается без обрезания закреплённых действий.
+
+Тёмная тема оформляет viewport, меню трея и, если Windows поддерживает DWM
+dark title, системный заголовок. Оригинальная иконка с помидором и дугой
+таймера используется окном, панелью задач, треем и собранным EXE.
 
 ## Индикация превышения
 
@@ -95,8 +107,10 @@ class HelpWindow(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Справка")
-        self.resize(760, 620)
-        self.setMinimumSize(560, 420)
+        self.setWindowIcon(application_icon())
+        fit_window_to_available_screen(
+            self, parent, preferred=(760, 620), minimum=(560, 420),
+        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(HelpView(self))

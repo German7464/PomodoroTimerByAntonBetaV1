@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
 
 from app.theme import ThemePalette
@@ -99,8 +100,47 @@ def apply_card_shadow(widget: QWidget, palette: ThemePalette) -> None:
     widget.setGraphicsEffect(shadow)
 
 
-def build_stylesheet(p: ThemePalette) -> str:
-    """Строит единый QSS для всех стандартных и проектных компонентов."""
+def build_application_palette(p: ThemePalette) -> QPalette:
+    """Отображает смысловые цвета темы на стандартные роли Qt."""
+    palette = QPalette()
+    roles = {
+        QPalette.ColorRole.Window: p.background,
+        QPalette.ColorRole.WindowText: p.text_primary,
+        QPalette.ColorRole.Base: p.card_background,
+        QPalette.ColorRole.AlternateBase: p.secondary_background,
+        QPalette.ColorRole.Text: p.text_primary,
+        QPalette.ColorRole.Button: p.button_background,
+        QPalette.ColorRole.ButtonText: p.button_text,
+        QPalette.ColorRole.Highlight: p.accent,
+        QPalette.ColorRole.HighlightedText: p.on_accent,
+        QPalette.ColorRole.PlaceholderText: p.text_secondary,
+        QPalette.ColorRole.ToolTipBase: p.text_primary,
+        QPalette.ColorRole.ToolTipText: p.background,
+        QPalette.ColorRole.Mid: p.border,
+        QPalette.ColorRole.Dark: p.border,
+        QPalette.ColorRole.Light: p.secondary_background,
+        QPalette.ColorRole.Link: p.error,
+        QPalette.ColorRole.LinkVisited: p.warning,
+    }
+    accent_role = getattr(QPalette.ColorRole, "Accent", None)
+    if accent_role is not None:
+        roles[accent_role] = p.accent
+    for role, color in roles.items():
+        palette.setColor(role, QColor(color))
+    for group in (QPalette.ColorGroup.Disabled, QPalette.ColorGroup.Inactive):
+        for role in (
+            QPalette.ColorRole.WindowText,
+            QPalette.ColorRole.Text,
+            QPalette.ColorRole.ButtonText,
+            QPalette.ColorRole.PlaceholderText,
+        ):
+            palette.setColor(group, role, QColor(p.disabled))
+    return palette
+
+
+@lru_cache(maxsize=1)
+def build_stylesheet() -> str:
+    """Возвращает один QSS, который получает цвета через текущий QPalette."""
     t = TOKENS
     return f"""
     * {{
@@ -108,44 +148,49 @@ def build_stylesheet(p: ThemePalette) -> str:
         outline: none;
     }}
     QMainWindow, QDialog, QWidget#AppRoot {{
-        background: {p.background};
-        color: {p.text_primary};
+        background: palette(window);
+        color: palette(window-text);
     }}
-    QWidget {{ color: {p.text_primary}; }}
+    QWidget {{ color: palette(window-text); }}
+    QScrollArea, QAbstractScrollArea, QStackedWidget,
+    QWidget#qt_scrollarea_viewport, QWidget[pageSurface="true"] {{
+        background: palette(window);
+        border: none;
+    }}
     QFrame#Sidebar {{
-        background: {p.secondary_background};
-        border-right: 1px solid {p.border};
+        background: palette(alternate-base);
+        border-right: 1px solid palette(mid);
     }}
     QFrame[card="true"], QGroupBox {{
-        background: {p.card_background};
-        border: 1px solid {p.border};
+        background: palette(base);
+        border: 1px solid palette(mid);
         border-radius: {t.radii.card}px;
     }}
     QFrame[tone="subtle"] {{
-        background: {p.secondary_background};
-        border: 1px solid {p.border};
+        background: palette(alternate-base);
+        border: 1px solid palette(mid);
         border-radius: {t.radii.control}px;
     }}
     QLabel[role="pageTitle"] {{
         font-size: {t.typography.headline}px;
         font-weight: 650;
-        color: {p.text_primary};
+        color: palette(window-text);
     }}
     QLabel[role="sectionTitle"] {{
         font-size: {t.typography.title}px;
         font-weight: 650;
-        color: {p.text_primary};
+        color: palette(window-text);
     }}
     QLabel[role="subtitle"], QLabel[muted="true"] {{
-        color: {p.text_secondary};
+        color: palette(placeholder-text);
     }}
     QLabel[role="caption"] {{
-        color: {p.text_secondary};
+        color: palette(placeholder-text);
         font-size: {t.typography.caption}px;
     }}
     QLabel[role="timer"] {{
         font-weight: 700;
-        color: {p.text_primary};
+        color: palette(window-text);
     }}
     QLabel[role="mode"] {{
         font-weight: 650;
@@ -153,11 +198,11 @@ def build_stylesheet(p: ThemePalette) -> str:
     QLabel[role="metric"] {{
         font-size: {t.typography.title}px;
         font-weight: 700;
-        color: {p.accent};
+        color: palette(highlight);
     }}
     QLabel[role="statusChip"] {{
-        background: {p.secondary_background};
-        border: 1px solid {p.border};
+        background: palette(alternate-base);
+        border: 1px solid palette(mid);
         border-radius: 12px;
         padding: 4px 10px;
         font-weight: 600;
@@ -165,28 +210,28 @@ def build_stylesheet(p: ThemePalette) -> str:
     QPushButton {{
         min-height: {t.controls.height}px;
         padding: 0 {t.spacing.md}px;
-        background: {p.button_background};
-        color: {p.button_text};
-        border: 1px solid {p.border};
+        background: palette(button);
+        color: palette(button-text);
+        border: 1px solid palette(mid);
         border-radius: {t.radii.control}px;
         font-weight: 600;
     }}
-    QPushButton:hover {{ background: {p.secondary_background}; border-color: {p.focus}; }}
-    QPushButton:pressed {{ background: {p.border}; }}
-    QPushButton:focus {{ border: {t.focus_width}px solid {p.focus}; }}
-    QPushButton:disabled {{ color: {p.disabled}; background: {p.secondary_background}; border-color: {p.border}; }}
-    QPushButton[variant="primary"] {{ background: {p.accent}; color: {p.on_accent}; border-color: {p.accent}; }}
-    QPushButton[variant="primary"]:hover {{ background: {p.accent_hover}; border-color: {p.accent_hover}; }}
-    QPushButton[variant="ghost"] {{ background: transparent; border-color: transparent; color: {p.text_primary}; }}
-    QPushButton[variant="ghost"]:hover {{ background: {p.secondary_background}; border-color: {p.border}; }}
-    QPushButton[variant="danger"] {{ background: transparent; color: {p.error}; border-color: {p.error}; }}
-    QPushButton[variant="danger"]:hover {{ background: {rgba(p.error, 28)}; }}
+    QPushButton:hover {{ background: palette(alternate-base); border-color: palette(highlight); }}
+    QPushButton:pressed {{ background: palette(mid); }}
+    QPushButton:focus {{ border: {t.focus_width}px solid palette(highlight); }}
+    QPushButton:disabled {{ color: palette(placeholder-text); background: palette(alternate-base); border-color: palette(mid); }}
+    QPushButton[variant="primary"] {{ background: palette(highlight); color: palette(highlighted-text); border-color: palette(highlight); }}
+    QPushButton[variant="primary"]:hover {{ background: palette(highlight); border-color: palette(highlight); }}
+    QPushButton[variant="ghost"] {{ background: transparent; border-color: transparent; color: palette(window-text); }}
+    QPushButton[variant="ghost"]:hover {{ background: palette(alternate-base); border-color: palette(mid); }}
+    QPushButton[variant="danger"] {{ background: transparent; color: palette(link); border-color: palette(link); }}
+    QPushButton[variant="danger"]:hover {{ background: palette(alternate-base); }}
     QPushButton[variant="primary"]:disabled,
     QPushButton[variant="ghost"]:disabled,
     QPushButton[variant="danger"]:disabled {{
-        color: {p.disabled};
-        background: {p.secondary_background};
-        border-color: {p.border};
+        color: palette(placeholder-text);
+        background: palette(alternate-base);
+        border-color: palette(mid);
     }}
     QPushButton[nav="true"] {{
         min-height: 44px;
@@ -194,62 +239,89 @@ def build_stylesheet(p: ThemePalette) -> str:
         padding-left: {t.spacing.md}px;
         background: transparent;
         border-color: transparent;
-        color: {p.text_secondary};
+        color: palette(placeholder-text);
     }}
-    QPushButton[nav="true"]:hover {{ background: {p.card_background}; color: {p.text_primary}; }}
-    QPushButton[nav="true"]:checked {{ background: {p.card_background}; color: {p.accent}; border-color: {p.border}; }}
+    QPushButton[nav="true"]:hover {{ background: palette(base); color: palette(window-text); }}
+    QPushButton[nav="true"]:checked {{ background: palette(base); color: palette(highlight); border-color: palette(mid); }}
     QLineEdit, QSpinBox, QComboBox {{
         min-height: {t.controls.height}px;
         padding: 0 {t.spacing.sm}px;
-        background: {p.card_background};
-        color: {p.text_primary};
-        selection-background-color: {p.accent};
-        selection-color: {p.on_accent};
-        border: 1px solid {p.border};
+        background: palette(base);
+        color: palette(text);
+        selection-background-color: palette(highlight);
+        selection-color: palette(highlighted-text);
+        border: 1px solid palette(mid);
         border-radius: {t.radii.control}px;
     }}
-    QLineEdit:hover, QSpinBox:hover, QComboBox:hover {{ border-color: {p.focus}; }}
-    QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: {t.focus_width}px solid {p.focus}; }}
-    QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: {p.disabled}; background: {p.secondary_background}; }}
+    QLineEdit:hover, QSpinBox:hover, QComboBox:hover {{ border-color: palette(highlight); }}
+    QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: {t.focus_width}px solid palette(highlight); }}
+    QLineEdit[invalid="true"] {{ border: {t.focus_width}px solid palette(link); }}
+    QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: palette(placeholder-text); background: palette(alternate-base); }}
     QComboBox::drop-down {{ border: none; width: 30px; }}
     QComboBox QAbstractItemView {{
-        background: {p.card_background}; color: {p.text_primary};
-        border: 1px solid {p.border}; selection-background-color: {p.accent};
-        selection-color: {p.on_accent}; padding: 4px;
+        background: palette(base); color: palette(text);
+        border: 1px solid palette(mid); selection-background-color: palette(highlight);
+        selection-color: palette(highlighted-text); padding: 4px;
     }}
     QListWidget, QTextBrowser, QPlainTextEdit {{
-        background: {p.card_background};
-        color: {p.text_primary};
-        border: 1px solid {p.border};
+        background: palette(base);
+        color: palette(text);
+        border: 1px solid palette(mid);
         border-radius: {t.radii.control}px;
         padding: {t.spacing.xs}px;
-        selection-background-color: {p.accent};
-        selection-color: {p.on_accent};
+        selection-background-color: palette(highlight);
+        selection-color: palette(highlighted-text);
     }}
     QListWidget::item {{ padding: 9px; border-radius: 7px; }}
-    QListWidget::item:hover {{ background: {p.secondary_background}; }}
-    QListWidget::item:selected {{ background: {p.accent}; color: {p.on_accent}; }}
+    QListWidget::item:hover {{ background: palette(alternate-base); }}
+    QListWidget::item:selected {{ background: palette(highlight); color: palette(highlighted-text); }}
     QTabWidget::pane {{ border: none; background: transparent; top: -1px; }}
     QTabBar::tab {{
         min-height: 34px; padding: 0 {t.spacing.md}px; margin-right: 4px;
-        color: {p.text_secondary}; background: transparent;
+        color: palette(placeholder-text); background: transparent;
         border: 1px solid transparent; border-radius: {t.radii.small}px;
     }}
-    QTabBar::tab:hover {{ background: {p.secondary_background}; color: {p.text_primary}; }}
-    QTabBar::tab:selected {{ background: {p.card_background}; color: {p.accent}; border-color: {p.border}; }}
-    QSlider::groove:horizontal {{ height: 6px; background: {p.secondary_background}; border-radius: 3px; }}
-    QSlider::sub-page:horizontal {{ background: {p.accent}; border-radius: 3px; }}
+    QTabBar::tab:hover {{ background: palette(alternate-base); color: palette(window-text); }}
+    QTabBar::tab:selected {{ background: palette(base); color: palette(highlight); border-color: palette(mid); }}
+    QSlider::groove:horizontal {{ height: 6px; background: palette(alternate-base); border-radius: 3px; }}
+    QSlider::sub-page:horizontal {{ background: palette(highlight); border-radius: 3px; }}
     QSlider::handle:horizontal {{
         width: 18px; height: 18px; margin: -6px 0;
-        background: {p.card_background}; border: 2px solid {p.accent}; border-radius: 9px;
+        background: palette(base); border: 2px solid palette(highlight); border-radius: 9px;
     }}
-    QSlider::handle:horizontal:hover {{ border-color: {p.accent_hover}; }}
+    QSlider::handle:horizontal:hover {{ border-color: palette(highlight); }}
     QScrollBar:vertical {{ width: 10px; background: transparent; margin: 2px; }}
-    QScrollBar::handle:vertical {{ background: {p.border}; border-radius: 5px; min-height: 28px; }}
-    QScrollBar::handle:vertical:hover {{ background: {p.text_secondary}; }}
+    QScrollBar::handle:vertical {{ background: palette(mid); border-radius: 5px; min-height: 28px; }}
+    QScrollBar::handle:vertical:hover {{ background: palette(placeholder-text); }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QToolTip {{
-        background: {p.text_primary}; color: {p.background}; border: none;
+        background: palette(tool-tip-base); color: palette(tool-tip-text); border: none;
         border-radius: {t.radii.small}px; padding: 6px 9px;
     }}
+    QMenu {{
+        background: palette(base); color: palette(text);
+        border: 1px solid palette(mid); border-radius: {t.radii.control}px;
+        padding: {t.spacing.xs}px;
+    }}
+    QMenu::item {{ padding: 8px 28px 8px 12px; border-radius: {t.radii.small}px; }}
+    QMenu::item:selected {{ background: palette(highlight); color: palette(highlighted-text); }}
+    QMenu::item:disabled {{ color: palette(placeholder-text); }}
+    QMenu::separator {{ height: 1px; background: palette(mid); margin: 6px 8px; }}
+    """
+
+
+@lru_cache(maxsize=16)
+def build_menu_stylesheet(p: ThemePalette) -> str:
+    """Явный QSS контекстного меню трея на базе его QPalette."""
+    t = TOKENS
+    return f"""
+    QMenu {{
+        background: {p.card_background}; color: {p.text_primary};
+        border: 1px solid {p.border}; border-radius: {t.radii.control}px;
+        padding: {t.spacing.xs}px;
+    }}
+    QMenu::item {{ padding: 8px 28px 8px 12px; border-radius: {t.radii.small}px; }}
+    QMenu::item:selected {{ background: {p.accent}; color: {p.on_accent}; }}
+    QMenu::item:disabled {{ color: {p.disabled}; }}
+    QMenu::separator {{ height: 1px; background: {p.border}; margin: 6px 8px; }}
     """

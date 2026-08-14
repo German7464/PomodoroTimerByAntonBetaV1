@@ -13,20 +13,49 @@ from PySide6.QtSvg import QSvgRenderer
 ICON_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
 
 
+@lru_cache(maxsize=32)
+def _svg_source(name: str) -> str:
+    try:
+        return (ICON_DIR / f"{name}.svg").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 @lru_cache(maxsize=128)
 def themed_icon(name: str, color: str, size: int = 20) -> QIcon:
     """Возвращает SVG как чёткую QIcon нужного смыслового цвета."""
-    path = ICON_DIR / f"{name}.svg"
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError:
+    source = _svg_source(name)
+    if not source:
         return QIcon()
     source = source.replace("#000000", QColor(color).name().upper())
     renderer = QSvgRenderer(QByteArray(source.encode("utf-8")))
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(pixmap)
+    icon = QIcon()
+    for scale in (1.0, 1.5, 2.0):
+        pixels = max(1, round(size * scale))
+        pixmap = QPixmap(pixels, pixels)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter)
+        painter.end()
+        pixmap.setDevicePixelRatio(scale)
+        icon.addPixmap(pixmap)
+    return icon
+
+
+@lru_cache(maxsize=1)
+def application_icon() -> QIcon:
+    """Возвращает многослойную Windows-иконку с SVG fallback."""
+    ico = ICON_DIR / "app.ico"
+    if ico.exists():
+        icon = QIcon(str(ico))
+        if not icon.isNull():
+            return icon
+    return QIcon(str(ICON_DIR / "app.svg"))
+
+
+@lru_cache(maxsize=1)
+def tray_icon() -> QIcon:
+    """Контрастный малодетальный вариант для системного трея."""
+    icon = QIcon(str(ICON_DIR / "tray.svg"))
+    return icon if not icon.isNull() else application_icon()

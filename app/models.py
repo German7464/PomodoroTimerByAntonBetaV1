@@ -89,6 +89,7 @@ class AppSettings:
     widget_always_on_top: bool = True
     widget_x: int = 100
     widget_y: int = 100
+    main_window_geometry: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

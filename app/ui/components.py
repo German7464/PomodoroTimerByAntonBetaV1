@@ -9,18 +9,23 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPointF,
     QPropertyAnimation,
+    QRect,
     QRectF,
     QSize,
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -37,6 +42,112 @@ def repolish(widget: QWidget) -> None:
     style.unpolish(widget)
     style.polish(widget)
     widget.update()
+
+
+class FlowLayout(QLayout):
+    """Компактная flow-компоновка: переносит целые элементы без обрезания текста."""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        horizontal_spacing: int | None = None,
+        vertical_spacing: int | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._horizontal_spacing = TOKENS.spacing.sm if horizontal_spacing is None else horizontal_spacing
+        self._vertical_spacing = TOKENS.spacing.sm if vertical_spacing is None else vertical_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802 - Qt API
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:  # noqa: N802 - Qt API
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:  # noqa: N802 - Qt API
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientations:  # noqa: N802 - Qt API
+        return Qt.Orientations()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt API
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt API
+        return self._do_layout(QRect(0, 0, max(0, width), 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802 - Qt API
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802 - Qt API
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+
+    def _do_layout(self, rect: QRect, *, test_only: bool) -> int:
+        margins = self.contentsMargins()
+        effective = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        for item in self._items:
+            hint = item.sizeHint().expandedTo(item.minimumSize())
+            next_x = x + hint.width() + self._horizontal_spacing
+            if line_height and next_x - self._horizontal_spacing > effective.right() + 1:
+                x = effective.x()
+                y += line_height + self._vertical_spacing
+                next_x = x + hint.width() + self._horizontal_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPointF(x, y).toPoint(), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class ThemedScrollArea(QScrollArea):
+    """Scroll area с явно тематизированными рамкой, viewport и содержимым."""
+
+    def __init__(self, parent: QWidget | None, theme_manager: ThemeManager) -> None:
+        super().__init__(parent)
+        self._theme_manager = theme_manager
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setProperty("pageSurface", True)
+        self.viewport().setObjectName("qt_scrollarea_viewport")
+        self.viewport().setAutoFillBackground(True)
+        theme_manager.register(self._apply_theme)
+
+    def setWidget(self, widget: QWidget) -> None:  # noqa: N802 - Qt API
+        widget.setProperty("pageSurface", True)
+        widget.setAutoFillBackground(True)
+        super().setWidget(widget)
+        self._apply_theme(self._theme_manager.palette)
+
+    def _apply_theme(self, palette: ThemePalette) -> None:
+        for widget in (self, self.viewport(), self.widget()):
+            if widget is None:
+                continue
+            qt_palette = widget.palette()
+            qt_palette.setColor(qt_palette.ColorRole.Window, QColor(palette.background))
+            qt_palette.setColor(qt_palette.ColorRole.Base, QColor(palette.background))
+            widget.setPalette(qt_palette)
+            widget.update()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._theme_manager.unregister(self._apply_theme)
+        super().closeEvent(event)
 
 
 class Card(QFrame):
@@ -85,6 +196,7 @@ class AppButton(QPushButton):
         self.setProperty("variant", variant)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(TOKENS.controls.height)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._icon_name = icon_name
         self._theme_manager = theme_manager
         if theme_manager is not None:
@@ -99,6 +211,17 @@ class AppButton(QPushButton):
         )
         self.setIcon(themed_icon(self._icon_name, color, 20))
         self.setIconSize(QSize(20, 20))
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        base = super().sizeHint()
+        metrics = QFontMetrics(self.font())
+        width = metrics.horizontalAdvance(self.text()) + TOKENS.spacing.md * 2
+        if self._icon_name is not None:
+            width += 20 + TOKENS.spacing.xs
+        return QSize(max(base.width(), width), max(base.height(), TOKENS.controls.height))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return self.sizeHint()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._theme_manager is not None:
@@ -348,23 +471,41 @@ class PageHeader(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(TOKENS.spacing.md)
-        text_layout = QVBoxLayout()
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(TOKENS.spacing.md)
+        self._grid.setVerticalSpacing(TOKENS.spacing.sm)
+        self._text_container = QWidget(self)
+        text_layout = QVBoxLayout(self._text_container)
+        text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(TOKENS.spacing.xxs)
-        self.title_label = QLabel(title, self)
+        self.title_label = QLabel(title, self._text_container)
         self.title_label.setProperty("role", "pageTitle")
         text_layout.addWidget(self.title_label)
-        self.subtitle_label = QLabel(subtitle, self)
+        self.subtitle_label = QLabel(subtitle, self._text_container)
         self.subtitle_label.setProperty("role", "subtitle")
         self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setVisible(bool(subtitle))
         text_layout.addWidget(self.subtitle_label)
-        layout.addLayout(text_layout, 1)
-        self.actions = QHBoxLayout()
+        self._grid.addWidget(self._text_container, 0, 0)
+        self._grid.setColumnStretch(0, 1)
+        self.actions_container = QWidget(self)
+        self.actions = QHBoxLayout(self.actions_container)
+        self.actions.setContentsMargins(0, 0, 0, 0)
         self.actions.setSpacing(TOKENS.spacing.xs)
-        layout.addLayout(self.actions)
+        self._grid.addWidget(self.actions_container, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self._compact = False
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        compact = event.size().width() < 720
+        if compact != self._compact:
+            self._compact = compact
+            self._grid.removeWidget(self.actions_container)
+            if compact:
+                self._grid.addWidget(self.actions_container, 1, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+            else:
+                self._grid.addWidget(self.actions_container, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        super().resizeEvent(event)
 
 
 class MetricCard(Card):
@@ -381,15 +522,16 @@ class MetricCard(Card):
         self.content_layout.addWidget(self.value_label)
 
 
-class ColorSwatch(QPushButton):
+class ColorSwatch(QAbstractButton):
     """Доступный образец цвета, не хранящий случайные цвета интерфейса."""
 
     def __init__(self, color: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._color = color
         self.setFixedSize(44, 32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setToolTip(color)
-        self._refresh()
 
     @property
     def color(self) -> str:
@@ -398,9 +540,12 @@ class ColorSwatch(QPushButton):
     def set_color(self, color: str) -> None:
         self._color = color
         self.setToolTip(color)
-        self._refresh()
+        self.update()
 
-    def _refresh(self) -> None:
-        self.setStyleSheet(
-            f"QPushButton {{ background: {self._color}; border: 1px solid rgba(127,127,127,0.65); border-radius: 8px; min-height: 30px; padding: 0; }}"
-        )
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        border = self.palette().color(self.palette().ColorRole.Highlight if self.hasFocus() else self.palette().ColorRole.Mid)
+        painter.setPen(QPen(border, 2 if self.hasFocus() else 1))
+        painter.setBrush(QColor(self._color))
+        painter.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 8, 8)

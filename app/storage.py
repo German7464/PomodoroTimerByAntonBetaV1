@@ -34,6 +34,7 @@ from app.widget_settings import (
     normalize_widget_type,
     set_widget_layout_size,
 )
+from app.window_geometry import normalize_main_window_geometry
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -89,6 +90,7 @@ def default_settings_data() -> dict[str, Any]:
         "widget_always_on_top": True,
         "widget_x": 100,
         "widget_y": 100,
+        "main_window_geometry": {},
     }
 
 
@@ -147,6 +149,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
 
     settings["widget_opacity"] = normalize_widget_opacity(
         settings.get("widget_opacity"),
+    )
+    settings["main_window_geometry"] = normalize_main_window_geometry(
+        settings.get("main_window_geometry"),
     )
 
     # Эти поля оставлены для обратной совместимости со старыми версиями.
@@ -211,6 +216,9 @@ def save_app_settings(path: Path, settings: AppSettings) -> None:
     )
     settings.widget_x = int(active_layout["x"])
     settings.widget_y = int(active_layout["y"])
+    settings.main_window_geometry = normalize_main_window_geometry(
+        settings.main_window_geometry,
+    )
     save_json(path, settings.__dict__)
 
 

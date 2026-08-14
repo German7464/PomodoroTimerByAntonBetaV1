@@ -7,7 +7,7 @@ from dataclasses import dataclass, fields
 from typing import Callable, Final
 import weakref
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
 from app.models import TimerMode
@@ -69,7 +69,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#E5ECEA", text_primary="#17201E",
             text_secondary="#52615D", accent="#0F766E",
             accent_hover="#0B5F59", button_background="#E5ECEA",
-            button_text="#17201E", border="#CBD7D3", disabled="#84928E",
+            button_text="#17201E", border="#CBD7D3", disabled="#66736F",
             focus="#087E75", success="#27754C", warning="#805400",
             error="#AA3434", work="#0D6F68", short_break="#275F9E",
             long_break="#65509A", overwork="#9B3651",
@@ -81,7 +81,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#22302D", text_primary="#F2F7F5",
             text_secondary="#B4C2BE", accent="#5BC7B8",
             accent_hover="#78D5C9", button_background="#22302D",
-            button_text="#F2F7F5", border="#344541", disabled="#70817D",
+            button_text="#F2F7F5", border="#344541", disabled="#84938F",
             focus="#70D7CA", success="#6FD39A", warning="#F0BD66",
             error="#FF8A8A", work="#62C9BB", short_break="#7EB8F0",
             long_break="#B9A0F4", overwork="#F18AA2",
@@ -95,7 +95,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#E8ECFA", text_primary="#182039",
             text_secondary="#56607E", accent="#4F46E5",
             accent_hover="#3F37C7", button_background="#E8ECFA",
-            button_text="#182039", border="#D1D8EE", disabled="#8D95AD",
+            button_text="#182039", border="#D1D8EE", disabled="#687089",
             focus="#6557EF", success="#26734D", warning="#805400",
             error="#AA344D", work="#315E9F", short_break="#4B4BB7",
             long_break="#70409A", overwork="#A3335E",
@@ -107,7 +107,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#22283A", text_primary="#F4F5FF",
             text_secondary="#B7BDD4", accent="#9290FF",
             accent_hover="#AAA8FF", button_background="#22283A",
-            button_text="#F4F5FF", border="#353D55", disabled="#747C96",
+            button_text="#F4F5FF", border="#353D55", disabled="#8A92AD",
             focus="#A8A7FF", success="#70D29A", warning="#F0BD68",
             error="#FF8DA0", work="#83B2F0", short_break="#9C9AFF",
             long_break="#C2A0F5", overwork="#F190B1",
@@ -121,7 +121,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#EEE4D6", text_primary="#2E241C",
             text_secondary="#675548", accent="#A45127",
             accent_hover="#853F1D", button_background="#EEE4D6",
-            button_text="#2E241C", border="#DCCDBB", disabled="#998A7C",
+            button_text="#2E241C", border="#DCCDBB", disabled="#76685D",
             focus="#B45C30", success="#47704A", warning="#805000",
             error="#A43B35", work="#864A24", short_break="#566940",
             long_break="#714D72", overwork="#9D3940",
@@ -133,7 +133,7 @@ PALETTES: Final[dict[str, dict[str, ThemePalette]]] = {
             secondary_background="#302720", text_primary="#FAF5EE",
             text_secondary="#CCBFB2", accent="#E99A68",
             accent_hover="#F2B083", button_background="#302720",
-            button_text="#FAF5EE", border="#493C32", disabled="#84776C",
+            button_text="#FAF5EE", border="#493C32", disabled="#97887B",
             focus="#FFB485", success="#86C98D", warning="#E8B86A",
             error="#F28E85", work="#E7A16F", short_break="#AFC287",
             long_break="#C6A1C7", overwork="#F08A8E",
@@ -332,6 +332,8 @@ class ThemeManager(QObject):
         self.custom_theme = default_custom_theme()
         self.palette = get_palette(self.theme_name, self.appearance_mode, self.custom_theme)
         self._listeners: list[Callable[[ThemePalette], None] | weakref.WeakMethod] = []
+        self._applied_signature: tuple[str, str, tuple[tuple[str, str], ...]] | None = None
+        self._stylesheet_install_count = 0
 
     def register(self, listener: Callable[[ThemePalette], None]) -> None:
         if any(self._resolve_listener(item) == listener for item in self._listeners):
@@ -340,6 +342,11 @@ class ThemeManager(QObject):
         owner = getattr(listener, "__self__", None)
         self._listeners.append(weakref.WeakMethod(listener) if owner is not None else listener)
         listener(self.palette)
+
+    @property
+    def stylesheet_install_count(self) -> int:
+        """Диагностический счётчик: глобальный QSS не должен ставиться на каждую тему."""
+        return self._stylesheet_install_count
 
     def unregister(self, listener: Callable[[ThemePalette], None]) -> None:
         self._listeners = [
@@ -359,17 +366,41 @@ class ThemeManager(QObject):
         appearance_mode: object,
         custom_theme: object = None,
     ) -> ThemePalette:
-        self.theme_name = normalize_theme_name(theme_name)
-        self.appearance_mode = normalize_appearance_mode(appearance_mode)
+        normalized_theme = normalize_theme_name(theme_name)
+        normalized_mode = normalize_appearance_mode(appearance_mode)
         if custom_theme is not None:
             self.custom_theme = normalize_custom_theme(custom_theme)
-        self.palette = get_palette(self.theme_name, self.appearance_mode, self.custom_theme)
-        from app.ui.design_system import build_stylesheet
+        palette = get_palette(normalized_theme, normalized_mode, self.custom_theme)
+        signature = (normalized_theme, normalized_mode, tuple(sorted(palette.as_dict().items())))
+        if self._applied_signature == signature:
+            return self.palette
+
+        self.theme_name = normalized_theme
+        self.appearance_mode = normalized_mode
+        self.palette = palette
+        self._applied_signature = signature
+        from app.ui.design_system import build_application_palette, build_stylesheet
 
         application = QApplication.instance()
         if application is not None:
-            application.setStyleSheet(build_stylesheet(self.palette))
-        if isinstance(self.root, QWidget):
+            application.setPalette(build_application_palette(self.palette))
+            stylesheet = build_stylesheet()
+            if application.styleSheet() != stylesheet:
+                application.setStyleSheet(stylesheet)
+                self._stylesheet_install_count += 1
+            else:
+                # QSS palette(...) вычисляется при polish. Один контролируемый
+                # проход заметно дешевле повторного QApplication.setStyleSheet().
+                for widget in application.allWidgets():
+                    if widget.isVisible():
+                        self._repolish(widget)
+            for window in application.topLevelWidgets():
+                if window.windowType() not in (
+                    Qt.WindowType.Popup,
+                    Qt.WindowType.ToolTip,
+                ):
+                    self.apply_to_window(window)
+        elif isinstance(self.root, QWidget):
             self.apply_to_window(self.root)
         live_listeners = []
         for reference in tuple(self._listeners):
@@ -388,10 +419,36 @@ class ThemeManager(QObject):
 
     def apply_to_window(self, window: QWidget) -> None:
         window.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        style = window.style()
-        style.unpolish(window)
-        style.polish(window)
+        from app.ui.qt_app import apply_windows_title_bar
+
+        dark = self.appearance_mode == APPEARANCE_DARK
+        apply_windows_title_bar(window, dark)
+
+        # Windows применяет собственную тему non-client area в момент первого показа
+        # HWND и может перезаписать слишком ранний вызов DWM. Повтор в следующем
+        # обороте GUI-цикла оставляет системную рамку нативной и не создаёт таймер.
+        def refresh_native_frame() -> None:
+            try:
+                apply_windows_title_bar(window, self.appearance_mode == APPEARANCE_DARK)
+            except RuntimeError:
+                # Окно могло быть закрыто через deleteLater до выполнения singleShot.
+                return
+
+        QTimer.singleShot(0, refresh_native_frame)
         window.update()
+
+    def refresh_widget_tree(self, root: QWidget, *, visible_only: bool = True) -> None:
+        """Обновляет страницу при показе; скрытые страницы не замедляют смену темы."""
+        for widget in (root, *root.findChildren(QWidget)):
+            if not visible_only or widget.isVisible():
+                self._repolish(widget)
+
+    @staticmethod
+    def _repolish(widget: QWidget) -> None:
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
     def mode_style(self, mode: TimerMode, waiting_for_continue: bool) -> str:
         """Совместимый семантический результат для простых UI-адаптеров."""

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+import ctypes
+import os
 import sys
 
 from PySide6.QtCore import QTimer
@@ -11,15 +13,82 @@ from PySide6.QtWidgets import QApplication
 
 from app.config import APP_NAME
 from app.ui.design_system import TOKENS
+from app.ui.icons import application_icon
+
+
+APP_USER_MODEL_ID = "PomodoroTimerByAnton.Desktop"
+
+
+def configure_windows_app_identity() -> bool:
+    """Назначает стабильный AppUserModelID до первого окна; вне Windows no-op."""
+    if os.name != "nt":
+        return False
+    try:
+        result = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except (AttributeError, OSError):
+        return False
+    return int(result) == 0
+
+
+def apply_windows_title_bar(window, dark: bool) -> bool:
+    """Безопасно включает нативный тёмный DWM-заголовок Windows 10/11."""
+    if os.name != "nt":
+        return False
+    try:
+        handle = int(window.winId())
+        enabled = ctypes.c_int(1 if dark else 0)
+        dwm = ctypes.windll.dwmapi
+        for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE, старый fallback.
+            result = dwm.DwmSetWindowAttribute(
+                ctypes.c_void_p(handle),
+                ctypes.c_uint(attribute),
+                ctypes.byref(enabled),
+                ctypes.sizeof(enabled),
+            )
+            if int(result) == 0:
+                return True
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        return False
+    return False
+
+
+def fit_window_to_available_screen(
+    window,
+    parent=None,
+    *,
+    preferred: tuple[int, int],
+    minimum: tuple[int, int],
+    margin: int = 32,
+) -> None:
+    """Ограничивает диалог доступной областью выбранного Qt-экрана."""
+    application = QApplication.instance()
+    screen = parent.screen() if parent is not None else None
+    if screen is None and application is not None:
+        screen = application.primaryScreen()
+    if screen is None:
+        window.setMinimumSize(*minimum)
+        window.resize(*preferred)
+        return
+    available = screen.availableGeometry()
+    max_width = max(320, available.width() - margin)
+    max_height = max(320, available.height() - margin)
+    minimum_width = min(minimum[0], max_width)
+    minimum_height = min(minimum[1], max_height)
+    width = min(preferred[0], max_width)
+    height = min(preferred[1], max_height)
+    window.setMinimumSize(minimum_width, minimum_height)
+    window.resize(max(minimum_width, width), max(minimum_height, height))
 
 
 def ensure_application(argv: Sequence[str] | None = None) -> QApplication:
     """Создаёт единственный QApplication и задаёт общие Windows-параметры."""
+    configure_windows_app_identity()
     application = QApplication.instance()
     if application is None:
         application = QApplication(list(argv) if argv is not None else sys.argv)
     application.setApplicationName(APP_NAME)
     application.setOrganizationName("PomodoroTimerByAnton")
+    application.setWindowIcon(application_icon())
     application.setQuitOnLastWindowClosed(False)
     font = QFont(TOKENS.typography.family, TOKENS.typography.body)
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)

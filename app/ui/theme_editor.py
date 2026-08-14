@@ -11,12 +11,11 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDialog,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QScrollArea,
+    QApplication,
     QVBoxLayout,
     QWidget,
 )
@@ -33,8 +32,17 @@ from app.theme import (
     palette_contrast_warnings,
     palette_from_data,
 )
-from app.ui.components import AppButton, Card, ColorSwatch, PageHeader
+from app.ui.components import (
+    AppButton,
+    Card,
+    ColorSwatch,
+    FlowLayout,
+    PageHeader,
+    ThemedScrollArea,
+    repolish,
+)
 from app.ui.design_system import TOKENS
+from app.ui.icons import application_icon
 
 
 COLOR_GROUPS = (
@@ -70,8 +78,8 @@ class CustomThemeEditor(QDialog):
         self.color_edits: dict[str, QLineEdit] = {}
         self.swatches: dict[str, ColorSwatch] = {}
         self.setWindowTitle("Пользовательская тема")
-        self.resize(820, 760)
-        self.setMinimumSize(700, 560)
+        self.setWindowIcon(application_icon())
+        self._fit_to_available_screen(parent)
         self.setModal(False)
         self._build_ui()
         self._load_mode(self._mode)
@@ -85,29 +93,37 @@ class CustomThemeEditor(QDialog):
         root.addWidget(PageHeader("Пользовательская тема", "Редактируйте светлый и тёмный режимы независимо.", self))
 
         toolbar = Card(self, padding=TOKENS.spacing.md)
-        bar = QHBoxLayout()
-        bar.addWidget(QLabel("Редактируемый режим", toolbar))
-        self.mode_box = QComboBox(toolbar)
+        self.toolbar = toolbar
+        bar = FlowLayout(horizontal_spacing=TOKENS.spacing.md, vertical_spacing=TOKENS.spacing.sm)
+        mode_group = QWidget(toolbar)
+        mode_layout = QHBoxLayout(mode_group)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(TOKENS.spacing.xs)
+        mode_layout.addWidget(QLabel("Редактируемый режим", mode_group))
+        self.mode_box = QComboBox(mode_group)
         for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
             self.mode_box.addItem(APPEARANCE_LABELS[mode], mode)
         self.mode_box.setCurrentIndex(0 if self._mode == APPEARANCE_LIGHT else 1)
         self.mode_box.currentIndexChanged.connect(self._mode_changed)
-        bar.addWidget(self.mode_box)
-        bar.addSpacing(TOKENS.spacing.lg)
-        bar.addWidget(QLabel("Создать на основе", toolbar))
-        self.base_box = QComboBox(toolbar)
+        mode_layout.addWidget(self.mode_box)
+        bar.addWidget(mode_group)
+        base_group = QWidget(toolbar)
+        base_layout = QHBoxLayout(base_group)
+        base_layout.setContentsMargins(0, 0, 0, 0)
+        base_layout.setSpacing(TOKENS.spacing.xs)
+        base_layout.addWidget(QLabel("Создать на основе", base_group))
+        self.base_box = QComboBox(base_group)
         self.base_box.addItems(BUILTIN_THEME_NAMES)
-        bar.addWidget(self.base_box)
-        create_button = AppButton("Создать копию", toolbar, theme_manager=self.theme_manager)
-        create_button.clicked.connect(self._create_from_base)
-        bar.addWidget(create_button)
-        bar.addStretch(1)
+        base_layout.addWidget(self.base_box)
+        self.create_button = AppButton("Создать копию", base_group, theme_manager=self.theme_manager)
+        self.create_button.clicked.connect(self._create_from_base)
+        base_layout.addWidget(self.create_button)
+        bar.addWidget(base_group)
         toolbar.content_layout.addLayout(bar)
         root.addWidget(toolbar)
 
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll = ThemedScrollArea(self, self.theme_manager)
+        self.scroll = scroll
         content = QWidget(scroll)
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, TOKENS.spacing.xs, 0)
@@ -117,26 +133,27 @@ class CustomThemeEditor(QDialog):
             heading = QLabel(title, card)
             heading.setProperty("role", "sectionTitle")
             card.content_layout.addWidget(heading)
-            grid = QGridLayout()
-            grid.setHorizontalSpacing(TOKENS.spacing.sm)
-            grid.setVerticalSpacing(TOKENS.spacing.xs)
-            for row, (key, label) in enumerate(rows):
-                grid.addWidget(QLabel(label, card), row, 0)
+            for key, label in rows:
+                row_widget = QWidget(card)
+                row_layout = FlowLayout(row_widget, horizontal_spacing=TOKENS.spacing.sm, vertical_spacing=TOKENS.spacing.xs)
+                name_label = QLabel(label, row_widget)
+                name_label.setMinimumWidth(190)
+                row_layout.addWidget(name_label)
                 swatch = ColorSwatch("#000000", card)
                 swatch.clicked.connect(lambda _checked=False, selected=key: self._choose_color(selected))
-                grid.addWidget(swatch, row, 1)
+                row_layout.addWidget(swatch)
                 edit = QLineEdit(card)
+                edit.setMinimumWidth(180)
                 edit.setMaxLength(7)
                 edit.setPlaceholderText("#RRGGBB")
                 edit.textChanged.connect(lambda value, selected=key: self._color_text_changed(selected, value))
-                grid.addWidget(edit, row, 2)
+                row_layout.addWidget(edit)
                 choose = AppButton("Выбрать", card, variant="ghost", theme_manager=self.theme_manager)
                 choose.clicked.connect(lambda _checked=False, selected=key: self._choose_color(selected))
-                grid.addWidget(choose, row, 3)
+                row_layout.addWidget(choose)
                 self.color_edits[key] = edit
                 self.swatches[key] = swatch
-            grid.setColumnStretch(2, 1)
-            card.content_layout.addLayout(grid)
+                card.content_layout.addWidget(row_widget)
             content_layout.addWidget(card)
         content_layout.addStretch(1)
         scroll.setWidget(content)
@@ -146,24 +163,42 @@ class CustomThemeEditor(QDialog):
         self.contrast_label.setProperty("role", "caption")
         self.contrast_label.setWordWrap(True)
         root.addWidget(self.contrast_label)
-        footer = QHBoxLayout()
-        preview = AppButton("Предпросмотр", self, theme_manager=self.theme_manager)
-        preview.clicked.connect(self.preview)
-        reset_mode = AppButton("Сбросить текущий режим", self, theme_manager=self.theme_manager)
-        reset_mode.clicked.connect(self._reset_mode)
-        reset_all = AppButton("Сбросить всю тему", self, variant="danger", theme_manager=self.theme_manager)
-        reset_all.clicked.connect(self._reset_all)
-        cancel = AppButton("Отмена", self, variant="ghost", theme_manager=self.theme_manager)
-        cancel.clicked.connect(self.cancel)
-        apply_button = AppButton("Применить", self, variant="primary", theme_manager=self.theme_manager)
-        apply_button.clicked.connect(self.apply)
-        footer.addWidget(preview)
-        footer.addWidget(reset_mode)
-        footer.addWidget(reset_all)
-        footer.addStretch(1)
-        footer.addWidget(cancel)
-        footer.addWidget(apply_button)
-        root.addLayout(footer)
+        self.footer_widget = QWidget(self)
+        footer = FlowLayout(self.footer_widget, horizontal_spacing=TOKENS.spacing.sm, vertical_spacing=TOKENS.spacing.xs)
+        self.preview_button = AppButton("Предпросмотр", self.footer_widget, theme_manager=self.theme_manager)
+        self.preview_button.clicked.connect(self.preview)
+        self.reset_mode_button = AppButton("Сбросить текущий режим", self.footer_widget, theme_manager=self.theme_manager)
+        self.reset_mode_button.clicked.connect(self._reset_mode)
+        self.reset_all_button = AppButton("Сбросить всю тему", self.footer_widget, variant="danger", theme_manager=self.theme_manager)
+        self.reset_all_button.clicked.connect(self._reset_all)
+        self.cancel_button = AppButton("Отмена", self.footer_widget, variant="ghost", theme_manager=self.theme_manager)
+        self.cancel_button.clicked.connect(self.cancel)
+        self.apply_button = AppButton("Применить", self.footer_widget, variant="primary", theme_manager=self.theme_manager)
+        self.apply_button.clicked.connect(self.apply)
+        for button in (
+            self.preview_button,
+            self.reset_mode_button,
+            self.reset_all_button,
+            self.cancel_button,
+            self.apply_button,
+        ):
+            footer.addWidget(button)
+        root.addWidget(self.footer_widget)
+
+    def _fit_to_available_screen(self, parent: QWidget) -> None:
+        screen = parent.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(820, 720)
+            self.setMinimumSize(620, 480)
+            return
+        available = screen.availableGeometry()
+        margin = 32
+        minimum_width = min(620, max(480, available.width() - margin))
+        minimum_height = min(480, max(420, available.height() - margin))
+        target_width = min(920, max(minimum_width, round(available.width() * 0.72)))
+        target_height = min(820, max(minimum_height, round(available.height() * 0.82)))
+        self.setMinimumSize(minimum_width, minimum_height)
+        self.resize(target_width, target_height)
 
     def is_open(self) -> bool:
         return not self._closed and self.isVisible()
@@ -236,10 +271,10 @@ class CustomThemeEditor(QDialog):
             if not is_hex_color(value):
                 invalid.append(key)
                 edit.setProperty("invalid", True)
-                edit.setStyleSheet("border: 2px solid #AA3434;")
+                repolish(edit)
             else:
                 edit.setProperty("invalid", False)
-                edit.setStyleSheet("")
+                repolish(edit)
                 data[key] = value
         if invalid:
             if warn:
@@ -253,7 +288,8 @@ class CustomThemeEditor(QDialog):
         for key, edit in self.color_edits.items():
             edit.blockSignals(True)
             edit.setText(palette[key])
-            edit.setStyleSheet("")
+            edit.setProperty("invalid", False)
+            repolish(edit)
             edit.blockSignals(False)
             self.swatches[key].set_color(palette[key])
         self._show_contrast_status(self._palette_for_mode(mode))

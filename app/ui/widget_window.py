@@ -17,6 +17,7 @@ from app.timer_engine import TimerEngine
 from app.ui.components import AppButton, Card
 from app.ui.design_system import TOKENS
 from app.ui.qt_app import Debouncer
+from app.ui.icons import application_icon
 from app.ui.timer_visual import TimerVisual
 from app.widget_settings import (
     WIDGET_MIN_SIZES,
@@ -422,6 +423,7 @@ class WidgetWindow:
         self._apply_view_style(width, height, settings.widget_size)
         self.update()
         self.window.show()
+        self.theme_manager.apply_to_window(self.window)
         self.window.raise_()
         self.apply_opacity()
         QTimer.singleShot(250, self._enable_geometry_capture)
@@ -502,6 +504,7 @@ class WidgetWindow:
             return
         self.window = WidgetShell(self.parent)
         self.window.setWindowTitle("Виджет Pomodoro")
+        self.window.setWindowIcon(application_icon())
         self.window.closeRequested.connect(lambda: self._on_visibility_requested(False))
         self.window.geometryChanged.connect(self._on_geometry_changed)
         self._geometry_debouncer = Debouncer(self.window, self.SAVE_DELAY_MS, self._persist_current_layout)

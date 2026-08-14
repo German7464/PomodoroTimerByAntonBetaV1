@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QMessageBox,
-    QScrollArea,
     QSlider,
     QSpinBox,
     QStackedWidget,
@@ -54,8 +53,18 @@ from app.theme import (
     normalize_appearance_mode,
     normalize_theme_name,
 )
-from app.ui.components import AppButton, Card, ColorSwatch, PageHeader, SwitchRow
+from app.ui.components import (
+    AppButton,
+    Card,
+    ColorSwatch,
+    FlowLayout,
+    PageHeader,
+    SwitchRow,
+    ThemedScrollArea,
+)
 from app.ui.design_system import TOKENS
+from app.ui.qt_app import fit_window_to_available_screen
+from app.ui.icons import application_icon
 from app.ui.theme_editor import CustomThemeEditor
 from app.widget_settings import (
     DEFAULT_WIDGET_X,
@@ -118,7 +127,11 @@ class SettingsView(QWidget):
         self.toggle_switches: list[SwitchRow] = []
         self._theme_buttons = {}
         self._loading_form = True
+        self._compact_layout: bool | None = None
+        self._theme_columns: int | None = None
+        self._theme_cards: list[Card] = []
         self._build_ui()
+        self._apply_responsive_layout()
         self._load_settings_to_form(settings)
         self._loading_form = False
         self._reload_profiles_list()
@@ -128,6 +141,10 @@ class SettingsView(QWidget):
         outer.setContentsMargins(TOKENS.spacing.xl, TOKENS.spacing.xl, TOKENS.spacing.xl, TOKENS.spacing.lg)
         outer.setSpacing(TOKENS.spacing.lg)
         outer.addWidget(PageHeader("Настройки", "Изменения темы и виджета применяются сразу; остальные — после сохранения.", self))
+        self.section_selector = QComboBox(self)
+        self.section_selector.addItems(self.SECTION_NAMES)
+        self.section_selector.setVisible(False)
+        outer.addWidget(self.section_selector)
         body = QHBoxLayout()
         body.setSpacing(TOKENS.spacing.lg)
         self.section_list = QListWidget(self)
@@ -137,6 +154,7 @@ class SettingsView(QWidget):
         self.section_list.currentRowChanged.connect(self._section_changed)
         body.addWidget(self.section_list)
         self.stack = QStackedWidget(self)
+        self.section_selector.currentIndexChanged.connect(self._section_changed)
         body.addWidget(self.stack, 1)
         outer.addLayout(body, 1)
         builders = (
@@ -156,11 +174,39 @@ class SettingsView(QWidget):
     def _section_changed(self, index: int) -> None:
         if 0 <= index < self.stack.count():
             self.stack.setCurrentIndex(index)
+            self.theme_manager.refresh_widget_tree(self.stack.widget(index), visible_only=False)
+            self.section_list.blockSignals(True)
+            self.section_list.setCurrentRow(index)
+            self.section_list.blockSignals(False)
+            self.section_selector.blockSignals(True)
+            self.section_selector.setCurrentIndex(index)
+            self.section_selector.blockSignals(False)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        compact = self.width() < 820
+        if compact != self._compact_layout:
+            self._compact_layout = compact
+            self.section_list.setVisible(not compact)
+            self.section_selector.setVisible(compact)
+        if not hasattr(self, "_theme_grid"):
+            return
+        columns = 1 if self.stack.width() < 660 else 2
+        if columns == self._theme_columns:
+            return
+        self._theme_columns = columns
+        for card in self._theme_cards:
+            self._theme_grid.removeWidget(card)
+        for index, card in enumerate(self._theme_cards):
+            self._theme_grid.addWidget(card, index // columns, index % columns)
+        for column in range(2):
+            self._theme_grid.setColumnStretch(column, 1 if column < columns else 0)
 
     def _page(self, title: str, subtitle: str):
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll = ThemedScrollArea(self, self.theme_manager)
         content = QWidget(scroll)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, TOKENS.spacing.xs, TOKENS.spacing.lg)
@@ -180,6 +226,7 @@ class SettingsView(QWidget):
         scroll, content, layout = self._page("Оформление", "Полноценные палитры меняют все открытые окна без перезапуска.")
         grid = QGridLayout()
         grid.setSpacing(TOKENS.spacing.md)
+        self._theme_grid = grid
         descriptions = {
             "Comet": "Спокойная нейтральная палитра",
             "Aurora": "Холодные синие и фиолетовые акценты",
@@ -191,6 +238,7 @@ class SettingsView(QWidget):
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, selected=name: self._select_theme(selected))
             card = Card(content, padding=TOKENS.spacing.md)
+            card.setMinimumWidth(250)
             card.content_layout.addWidget(button)
             description = QLabel(descriptions[name], card)
             description.setProperty("role", "caption")
@@ -206,6 +254,7 @@ class SettingsView(QWidget):
             swatches.addStretch(1)
             card.content_layout.addLayout(swatches)
             grid.addWidget(card, index // 2, index % 2)
+            self._theme_cards.append(card)
             self._theme_buttons[name] = (button, preview_items)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
@@ -225,6 +274,7 @@ class SettingsView(QWidget):
         scroll, content, layout = self._page("Время", "Длительности применяются безопасно при сохранении.")
         card = Card(content)
         form = QFormLayout()
+        self._configure_form(form)
         form.setSpacing(TOKENS.spacing.sm)
         self.work_minutes = self._spin(1, 240)
         self.short_break_minutes = self._spin(1, 240)
@@ -265,6 +315,7 @@ class SettingsView(QWidget):
         for row in (self.notifications_enabled, self.notification_sound, self.auto_start):
             card.content_layout.addWidget(row)
         form = QFormLayout()
+        self._configure_form(form)
         self.work_message = QLineEdit(card)
         self.short_message = QLineEdit(card)
         self.long_message = QLineEdit(card)
@@ -280,6 +331,7 @@ class SettingsView(QWidget):
         scroll, content, layout = self._page("Плавающий виджет", "Видимость управляется переключателем на странице таймера.")
         card = Card(content)
         form = QFormLayout()
+        self._configure_form(form)
         self.widget_type = QComboBox(card)
         self.widget_type.addItems(WIDGET_TYPES)
         self.widget_type.currentTextChanged.connect(self._widget_type_changed)
@@ -319,6 +371,7 @@ class SettingsView(QWidget):
         scroll, content, layout = self._page("Индикация превышения", "Один общий кадр применяется к главному окну и открытому виджету.")
         card = Card(content)
         form = QFormLayout()
+        self._configure_form(form)
         self.overrun_effect = self._combo(OVERRUN_EFFECTS)
         self.overrun_scope = self._combo(OVERRUN_SCOPES)
         self.overrun_speed = self._combo(OVERRUN_SPEEDS)
@@ -341,32 +394,36 @@ class SettingsView(QWidget):
         colors.content_layout.addWidget(colors_title)
         self.overrun_color_edits = {}
         self.overrun_color_swatches = {}
-        color_grid = QGridLayout()
-        for row, (key, label) in enumerate(((OVERWORK_KEY, "Переработка"), (SHORT_BREAK_OVERRUN_KEY, "Короткий отдых сверх нормы"), (LONG_BREAK_OVERRUN_KEY, "Длинный отдых сверх нормы"))):
-            color_grid.addWidget(QLabel(label, colors), row, 0)
+        for key, label in ((OVERWORK_KEY, "Переработка"), (SHORT_BREAK_OVERRUN_KEY, "Короткий отдых сверх нормы"), (LONG_BREAK_OVERRUN_KEY, "Длинный отдых сверх нормы")):
+            color_row = QWidget(colors)
+            color_flow = FlowLayout(color_row, horizontal_spacing=TOKENS.spacing.sm, vertical_spacing=TOKENS.spacing.xs)
+            color_label = QLabel(label, color_row)
+            color_label.setMinimumWidth(220)
+            color_flow.addWidget(color_label)
             swatch = ColorSwatch("#000000", colors)
             swatch.clicked.connect(lambda _checked=False, selected=key: self._choose_overrun_color(selected))
-            color_grid.addWidget(swatch, row, 1)
+            color_flow.addWidget(swatch)
             edit = QLineEdit(colors)
+            edit.setMinimumWidth(140)
             edit.setMaxLength(7)
             edit.textChanged.connect(lambda value, selected=key: self._overrun_color_changed(selected, value))
-            color_grid.addWidget(edit, row, 2)
+            color_flow.addWidget(edit)
             choose = AppButton("Выбрать", colors, variant="ghost", theme_manager=self.theme_manager)
             choose.clicked.connect(lambda _checked=False, selected=key: self._choose_overrun_color(selected))
-            color_grid.addWidget(choose, row, 3)
+            color_flow.addWidget(choose)
             themed = AppButton("По теме", colors, variant="ghost", theme_manager=self.theme_manager)
             themed.clicked.connect(lambda _checked=False, selected=key: self._reset_overrun_color(selected))
-            color_grid.addWidget(themed, row, 4)
+            color_flow.addWidget(themed)
             self.overrun_color_edits[key] = edit
             self.overrun_color_swatches[key] = swatch
-        color_grid.setColumnStretch(2, 1)
-        colors.content_layout.addLayout(color_grid)
+            colors.content_layout.addWidget(color_row)
         layout.addWidget(colors)
         preview_card = Card(content, padding=TOKENS.spacing.md)
-        preview_row = QHBoxLayout()
+        preview_row = FlowLayout(horizontal_spacing=TOKENS.spacing.sm)
         preview_row.addWidget(QLabel("Предпросмотр", preview_card))
         self.overrun_preview_mode = self._combo(("Переработка", "Короткий отдых сверх нормы", "Длинный отдых сверх нормы"))
-        preview_row.addWidget(self.overrun_preview_mode, 1)
+        self.overrun_preview_mode.setMinimumWidth(260)
+        preview_row.addWidget(self.overrun_preview_mode)
         preview = AppButton("Показать", preview_card, variant="primary", theme_manager=self.theme_manager)
         preview.clicked.connect(self._preview_overrun)
         preview_row.addWidget(preview)
@@ -381,11 +438,10 @@ class SettingsView(QWidget):
         self.profile_name = QLineEdit(card)
         self.profile_name.setPlaceholderText("Имя профиля")
         card.content_layout.addWidget(self.profile_name)
-        row = QHBoxLayout()
         self.profiles_list = QListWidget(card)
         self.profiles_list.currentTextChanged.connect(self.profile_name.setText)
-        row.addWidget(self.profiles_list, 1)
-        buttons = QVBoxLayout()
+        card.content_layout.addWidget(self.profiles_list, 1)
+        buttons = FlowLayout(horizontal_spacing=TOKENS.spacing.sm)
         for text, callback, variant in (
             ("Сохранить профиль", self._save_profile, "primary"),
             ("Применить профиль", self._apply_selected_profile, "secondary"),
@@ -396,9 +452,7 @@ class SettingsView(QWidget):
             button = AppButton(text, card, variant=variant, theme_manager=self.theme_manager)
             button.clicked.connect(callback)
             buttons.addWidget(button)
-        buttons.addStretch(1)
-        row.addLayout(buttons)
-        card.content_layout.addLayout(row)
+        card.content_layout.addLayout(buttons)
         layout.addWidget(card)
         layout.addStretch(1)
         return scroll
@@ -444,6 +498,11 @@ class SettingsView(QWidget):
         combo = QComboBox()
         combo.addItems(list(values))
         return combo
+
+    @staticmethod
+    def _configure_form(form: QFormLayout) -> None:
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
     def sync_theme(self, theme_name: str, appearance_mode: str) -> None:
         self._set_theme_controls(theme_name, appearance_mode)
@@ -748,6 +807,7 @@ class SettingsView(QWidget):
             widget_background_color=self.settings.widget_background_color, widget_text_color=self.settings.widget_text_color,
             widget_opacity=self.widget_opacity.value(), widget_always_on_top=self.widget_topmost.isChecked(),
             widget_x=int(active_layout["x"]), widget_y=int(active_layout["y"]),
+            main_window_geometry=deepcopy(self.settings.main_window_geometry),
         )
 
     def _load_settings_to_form(self, settings: AppSettings) -> None:
@@ -803,8 +863,11 @@ class SettingsWindow(QDialog):
         super().__init__(parent)
         self.window = self
         self.setWindowTitle("Настройки")
-        self.resize(1040, 700)
-        self.setMinimumSize(820, 560)
+        self.setWindowIcon(application_icon())
+        fit_window_to_available_screen(
+            self, parent, preferred=(1040, 700), minimum=(760, 520),
+        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(SettingsView(self, settings, on_save, theme_manager=theme_manager))
+        theme_manager.apply_to_window(self)
