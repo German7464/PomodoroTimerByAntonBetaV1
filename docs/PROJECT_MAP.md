@@ -8,6 +8,7 @@ PomodoroTimerByAnton — portable Windows-приложение Pomodoro на Pyt
 python -m pip install -r requirements-dev.txt
 python main.py
 python -m unittest discover -s tests -v
+python tools/generate_app_icons.py
 python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 ```
 
@@ -19,10 +20,12 @@ python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 - `app/timer_engine.py`, `models.py` — независимая машина состояния и модели.
 - `app/statistics.py`, `storage.py`, `profiles.py` — миграция/сохранение пользовательских данных.
 - `app/overrun_effects.py` — чистая математика кадров и единый контроллер.
+- `app/window_geometry.py` — первый размер, сохранение и clamp главного окна по мониторам.
 - `app/theme.py` — смысловые палитры и Qt ThemeManager.
 - `app/notifications.py`, `single_instance.py`, `autostart.py` — уведомления, mutex, HKCU Run.
 - `app/ui/` — Qt-окна, дизайн-система, компоненты и семь видов виджета.
-- `assets/icons/` — проектные SVG и лицензия.
+- `assets/icons/` — проектные SVG, PNG 16–256, многослойный ICO и лицензия CC0.
+- `tools/generate_app_icons.py` — воспроизводимая генерация PNG/ICO из `app.svg` средствами PySide6.
 - `tests/` — unittest, включая PySide6 QtTest/offscreen.
 - `docs/` — постоянная архитектурная документация.
 - `PomodoroTimerByAnton.spec` — onedir-сборка PyInstaller.
@@ -37,7 +40,7 @@ python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 
 В Python-режиме каталог — `data/` в проекте. В onedir exe каталог `data/` создаётся рядом с exe; если это невозможно, используется `%USERPROFILE%/.pomodoro_timer_by_anton` с предупреждением. Старые данные копируются безопасно и не удаляются.
 
-`settings.json` соответствует полям `AppSettings`: длительности, уведомления, профили, `theme_name`, `appearance_mode`, две custom-палитры, `overrun_visual`, `widget_enabled`, тип/размер/opacity и `widget_layouts` для семи типов. Отсутствующие/неверные известные поля нормализуются; старые координаты мигрируют в компактный вид.
+`settings.json` соответствует полям `AppSettings`: длительности, уведомления, профили, `theme_name`, `appearance_mode`, две custom-палитры, `overrun_visual`, `widget_enabled`, тип/размер/opacity, `widget_layouts` для семи типов и `main_window_geometry`. Отсутствующие/неверные известные поля нормализуются; старые координаты мигрируют в компактный вид, а неверная геометрия главного окна возвращается на доступный монитор.
 
 `profiles.json` хранит именованные срезы настроек. `statistics.json` имеет `version: 2`, блоки `all_time` и `daily`, обычные метрики и три независимых счётчика превышения. Версия 1 дополняется нулями без повторного учёта периодов; структурное повреждение резервируется как `.corrupt*.bak`. Превышение записывается только при «Продолжить» или полном выходе.
 
@@ -49,6 +52,7 @@ Runtime: `PySide6-Essentials==6.11.1`/`shiboken6`, LGPL-3.0 option, динами
 
 - mutex, автозапуск и целевая сборка ориентированы на Windows 10/11;
 - системный title bar остаётся нативным для надёжного DPI, resize и доступности;
+- Windows может оставить нативный title bar светлым, даже приняв DWM dark-mode attribute; frameless-замена намеренно не используется;
 - секундный тик не компенсирует глубокий сон системы;
 - Qt offscreen не подтверждает ClearType, реальный multi-monitor DPI, tray shell и GPU; это ручная релизная матрица;
 - very-low widget opacity намеренно может снижать контраст; главный переключатель остаётся способом вернуть окно.

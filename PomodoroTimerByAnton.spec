@@ -6,24 +6,16 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('assets/icons/*.svg', 'assets/icons'),
-        ('assets/icons/LICENSE.md', 'assets/icons'),
+        ('assets/icons/*', 'assets/icons'),
         ('THIRD_PARTY_NOTICES.md', '.'),
     ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        'tkinter',
-        'PIL',
-        'pystray',
-        'PySide6.QtQml',
-        'PySide6.QtQuick',
-        'PySide6.QtWebEngineCore',
-    ],
+    excludes=[],
     noarchive=False,
-    optimize=1,
+    optimize=0,
 )
 pyz = PYZ(a.pure)
 
@@ -36,20 +28,21 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icons/app.ico',
 )
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     name='PomodoroTimerByAnton',
 )
