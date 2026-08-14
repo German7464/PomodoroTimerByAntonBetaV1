@@ -36,9 +36,10 @@ from app.theme import (
     normalize_theme_name,
 )
 from app.timer_engine import TimerEngine
-from app.ui.components import AppButton, Card, PageHeader, SwitchRow
+from app.ui.components import AppButton, Card, FlowLayout, PageHeader, SwitchRow
 from app.ui.design_system import TOKENS
 from app.ui.help_window import HelpView
+from app.ui.icons import application_icon
 from app.ui.qt_app import Debouncer, QtScheduler, ensure_application
 from app.ui.settings_window import SettingsView
 from app.ui.stats_view import StatsView
@@ -46,6 +47,11 @@ from app.ui.timer_visual import TimerVisual
 from app.ui.tray import TrayController
 from app.ui.widget_window import WidgetActions, WidgetWindow
 from app.widget_settings import normalize_widget_opacity
+from app.window_geometry import (
+    MAIN_WINDOW_MIN_HEIGHT,
+    MAIN_WINDOW_MIN_WIDTH,
+    fit_main_window_geometry,
+)
 
 
 class MainWindow(QMainWindow):
@@ -57,11 +63,15 @@ class MainWindow(QMainWindow):
         self.root = self  # Совместимый атрибут для внешних диагностик.
         self.setObjectName("MainWindow")
         self.setWindowTitle(APP_NAME)
-        self.resize(1120, 760)
-        self.setMinimumSize(900, 620)
+        self.setWindowIcon(application_icon())
+        self.setMinimumSize(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT)
         self._exiting = False
+        self._geometry_ready = False
 
         self.settings = load_app_settings(SETTINGS_FILE)
+        self._settings_save = Debouncer(self, 500, self._save_settings_now)
+        self._layout_resize = Debouncer(self, 80, self._apply_responsive_layout)
+        self._restore_main_window_geometry()
         self.theme_manager = ThemeManager(self)
         self.theme_manager.apply(
             self.settings.theme_name,
@@ -73,7 +83,6 @@ class MainWindow(QMainWindow):
         self.statistics = StatisticsService(STATISTICS_FILE)
 
         self._scheduler = QtScheduler(self)
-        self._settings_save = Debouncer(self, 500, self._save_settings_now)
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -107,9 +116,12 @@ class MainWindow(QMainWindow):
             toggle_timer=self.toggle_timer_from_tray,
             reset_timer=self.reset,
             exit_app=self.exit_app,
+            theme_manager=self.theme_manager,
         )
 
         self._build_ui()
+        self._geometry_ready = True
+        self._apply_responsive_layout()
         self.set_widget_visibility(self.settings.widget_enabled, persist=False)
         self.apply_theme_selection(
             self.settings.theme_name,
@@ -128,18 +140,18 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        sidebar = QFrame(root)
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(220)
-        side = QVBoxLayout(sidebar)
+        self.sidebar = QFrame(root)
+        self.sidebar.setObjectName("Sidebar")
+        self.sidebar.setFixedWidth(TOKENS.controls.sidebar_width)
+        side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(TOKENS.spacing.md, TOKENS.spacing.xl, TOKENS.spacing.md, TOKENS.spacing.lg)
         side.setSpacing(TOKENS.spacing.xs)
-        brand = QLabel("Pomodoro", sidebar)
-        brand.setProperty("role", "pageTitle")
-        side.addWidget(brand)
-        subtitle = QLabel("Спокойный ритм работы", sidebar)
-        subtitle.setProperty("role", "caption")
-        side.addWidget(subtitle)
+        self.brand_label = QLabel("Pomodoro", self.sidebar)
+        self.brand_label.setProperty("role", "pageTitle")
+        side.addWidget(self.brand_label)
+        self.brand_subtitle = QLabel("Спокойный ритм работы", self.sidebar)
+        self.brand_subtitle.setProperty("role", "caption")
+        side.addWidget(self.brand_subtitle)
         side.addSpacing(TOKENS.spacing.xl)
 
         self.page_stack = QStackedWidget(root)
@@ -153,7 +165,7 @@ class MainWindow(QMainWindow):
         )
         self.nav_buttons: list[AppButton] = []
         for index, (text, icon) in enumerate(nav_specs):
-            button = AppButton(text, sidebar, variant="ghost", icon_name=icon, theme_manager=self.theme_manager)
+            button = AppButton(text, self.sidebar, variant="ghost", icon_name=icon, theme_manager=self.theme_manager)
             button.setProperty("nav", True)
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, target=index: self.page_stack.setCurrentIndex(target))
@@ -161,10 +173,10 @@ class MainWindow(QMainWindow):
             self.nav_buttons.append(button)
             side.addWidget(button)
         side.addStretch(1)
-        version = QLabel("Qt 6 · Windows", sidebar)
-        version.setProperty("role", "caption")
-        side.addWidget(version)
-        layout.addWidget(sidebar)
+        self.version_label = QLabel("Qt 6 · Windows", self.sidebar)
+        self.version_label.setProperty("role", "caption")
+        side.addWidget(self.version_label)
+        layout.addWidget(self.sidebar)
 
         self.page_stack.addWidget(self._build_timer_page())
         self.stats_view = StatsView(self.page_stack, self.statistics, self.theme_manager)
@@ -187,12 +199,14 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self.settings_view)
         self.help_view = HelpView(self.page_stack)
         self.page_stack.addWidget(self.help_view)
+        self.page_stack.currentChanged.connect(self._page_changed)
         layout.addWidget(self.page_stack, 1)
         self.nav_buttons[0].setChecked(True)
 
     def _build_timer_page(self) -> QWidget:
         page = QWidget(self)
         outer = QVBoxLayout(page)
+        self.timer_page_layout = outer
         outer.setContentsMargins(TOKENS.spacing.xxl, TOKENS.spacing.xl, TOKENS.spacing.xxl, TOKENS.spacing.xl)
         outer.setSpacing(TOKENS.spacing.lg)
         header = PageHeader("Фокус-сессия", "Один таймер для главного окна, уведомления и виджета.", page)
@@ -203,7 +217,6 @@ class MainWindow(QMainWindow):
             theme_manager=self.theme_manager,
             animations_enabled=lambda: bool(self.settings.overrun_visual.get("animations_enabled", True)),
         )
-        self.appearance_mode_switch.setFixedWidth(280)
         self.appearance_mode_switch.valueChanged.connect(self.set_dark_appearance)
         header.actions.addWidget(self.appearance_mode_switch)
         outer.addWidget(header)
@@ -217,9 +230,7 @@ class MainWindow(QMainWindow):
         self.status_label.setAccessibleName("Состояние таймера")
         timer_card.content_layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignCenter)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(TOKENS.spacing.sm)
-        controls.addStretch(1)
+        controls = FlowLayout(horizontal_spacing=TOKENS.spacing.sm, vertical_spacing=TOKENS.spacing.sm)
         self.start_button = AppButton("Старт", timer_card, variant="primary", icon_name="play", theme_manager=self.theme_manager)
         self.start_button.clicked.connect(self.start)
         self.pause_button = AppButton("Пауза", timer_card, icon_name="pause", theme_manager=self.theme_manager)
@@ -230,7 +241,6 @@ class MainWindow(QMainWindow):
         self.reset_button.clicked.connect(self.reset)
         for button in (self.start_button, self.pause_button, self.skip_button, self.reset_button):
             controls.addWidget(button)
-        controls.addStretch(1)
         timer_card.content_layout.addLayout(controls)
         self.continue_button = AppButton(
             "Продолжить и начать следующий период",
@@ -292,6 +302,7 @@ class MainWindow(QMainWindow):
 
     def apply_settings(self, settings: AppSettings, autostart_changed: bool = False) -> None:
         should_reset_timer = self._duration_settings_changed(settings)
+        settings.main_window_geometry = deepcopy(self.settings.main_window_geometry)
         if autostart_changed:
             try:
                 self.autostart.set_enabled(settings.autostart_enabled)
@@ -319,9 +330,19 @@ class MainWindow(QMainWindow):
 
     def show_window(self) -> None:
         self._sync_widget_visibility()
+        self._ensure_main_window_visible()
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        if hasattr(self, "page_stack"):
+            QTimer.singleShot(0, lambda: self.theme_manager.refresh_widget_tree(self, visible_only=True))
+
+    def _page_changed(self, index: int) -> None:
+        if 0 <= index < self.page_stack.count():
+            self.theme_manager.refresh_widget_tree(self.page_stack.widget(index), visible_only=False)
 
     def hide_to_tray(self) -> None:
         self.hide()
@@ -463,7 +484,87 @@ class MainWindow(QMainWindow):
         self._settings_save.trigger()
 
     def _save_settings_now(self) -> None:
+        self._capture_main_window_geometry()
         save_app_settings(SETTINGS_FILE, self.settings)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._geometry_ready:
+            self._layout_resize.trigger()
+            if not self.isMaximized() and not self.isMinimized():
+                self._settings_save.trigger()
+        super().resizeEvent(event)
+
+    def moveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._geometry_ready and not self.isMaximized() and not self.isMinimized():
+            self._settings_save.trigger()
+        super().moveEvent(event)
+
+    def _apply_responsive_layout(self) -> None:
+        if not hasattr(self, "sidebar"):
+            return
+        width = self.width()
+        if width < 1200:
+            sidebar_width = 72
+            collapsed = True
+            self.brand_label.setVisible(False)
+            self.brand_subtitle.setVisible(False)
+            self.version_label.setVisible(False)
+        else:
+            sidebar_width = TOKENS.controls.sidebar_width
+            collapsed = False
+            self.brand_label.setVisible(True)
+            self.brand_subtitle.setVisible(True)
+            self.version_label.setVisible(True)
+        self.sidebar.setFixedWidth(sidebar_width)
+        labels = ("Таймер", "Статистика", "Настройки", "Справка")
+        for button, label in zip(self.nav_buttons, labels, strict=True):
+            button.setText("" if collapsed else label)
+            button.setToolTip(label if collapsed else "")
+            button.setAccessibleName(label)
+        margin = TOKENS.spacing.lg if width < 980 else TOKENS.spacing.xl
+        self.timer_page_layout.setContentsMargins(
+            margin, TOKENS.spacing.lg, margin, TOKENS.spacing.lg,
+        )
+
+    def _screen_rectangles(self) -> list[tuple[int, int, int, int]]:
+        rectangles = []
+        primary = self.application.primaryScreen()
+        screens = list(self.application.screens())
+        if primary in screens:
+            screens.remove(primary)
+            screens.insert(0, primary)
+        for screen in screens:
+            geometry = screen.availableGeometry()
+            rectangles.append((geometry.x(), geometry.y(), geometry.width(), geometry.height()))
+        return rectangles
+
+    def _restore_main_window_geometry(self) -> None:
+        geometry = fit_main_window_geometry(
+            self.settings.main_window_geometry,
+            self._screen_rectangles(),
+        )
+        self.resize(geometry["width"], geometry["height"])
+        self.move(geometry["x"], geometry["y"])
+        self.settings.main_window_geometry = geometry
+
+    def _ensure_main_window_visible(self) -> None:
+        current = {
+            "x": self.x(), "y": self.y(),
+            "width": self.width(), "height": self.height(),
+        }
+        geometry = fit_main_window_geometry(current, self._screen_rectangles())
+        if geometry != current:
+            self.resize(geometry["width"], geometry["height"])
+            self.move(geometry["x"], geometry["y"])
+        self.settings.main_window_geometry = geometry
+
+    def _capture_main_window_geometry(self) -> None:
+        if not self._geometry_ready or self.isMaximized() or self.isMinimized():
+            return
+        self.settings.main_window_geometry = {
+            "x": self.x(), "y": self.y(),
+            "width": self.width(), "height": self.height(),
+        }
 
     def _sync_appearance_switch(self) -> None:
         if hasattr(self, "appearance_mode_switch"):
