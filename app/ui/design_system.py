@@ -218,7 +218,6 @@ def build_stylesheet() -> str:
     }}
     QPushButton:hover {{ background: palette(alternate-base); border-color: palette(highlight); }}
     QPushButton:pressed {{ background: palette(mid); }}
-    QPushButton:focus {{ border: {t.focus_width}px solid palette(highlight); }}
     QPushButton:disabled {{ color: palette(placeholder-text); background: palette(alternate-base); border-color: palette(mid); }}
     QPushButton[variant="primary"] {{ background: palette(highlight); color: palette(highlighted-text); border-color: palette(highlight); }}
     QPushButton[variant="primary"]:hover {{ background: palette(highlight); border-color: palette(highlight); }}

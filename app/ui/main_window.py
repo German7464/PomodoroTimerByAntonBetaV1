@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self._geometry_ready = False
 
         self.settings = load_app_settings(SETTINGS_FILE)
+        self._sync_interface_motion_setting()
         self._settings_save = Debouncer(self, 500, self._save_settings_now)
         self._layout_resize = Debouncer(self, 80, self._apply_responsive_layout)
         self._restore_main_window_geometry()
@@ -312,6 +313,7 @@ class MainWindow(QMainWindow):
         self._settings_save.cancel()
         settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.settings = settings
+        self._sync_interface_motion_setting()
         self.settings_view.settings = settings
         self.settings_view.update_autostart_status(self.autostart.status())
         self.apply_theme_selection(
@@ -327,6 +329,14 @@ class MainWindow(QMainWindow):
         if should_reset_timer and not self.timer.state.waiting_for_continue:
             self.timer.reset()
         self._refresh_labels()
+
+    def _sync_interface_motion_setting(self) -> None:
+        """Делает существующее отключение движения общим для UI-анимаций."""
+        visual = self.settings.overrun_visual if isinstance(self.settings.overrun_visual, dict) else {}
+        self.application.setProperty(
+            "animationsEnabled",
+            bool(visual.get("animations_enabled", True)),
+        )
 
     def show_window(self) -> None:
         self._sync_widget_visibility()

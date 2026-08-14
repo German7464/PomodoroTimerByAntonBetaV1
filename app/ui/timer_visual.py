@@ -46,27 +46,29 @@ class TimerVisual(QWidget):
         self._mono = mono
         self._show_mode = show_mode
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(TOKENS.spacing.lg, TOKENS.spacing.md, TOKENS.spacing.lg, TOKENS.spacing.md)
-        layout.setSpacing(TOKENS.spacing.xs)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.content_layout = QVBoxLayout(self)
+        self.content_layout.setContentsMargins(
+            TOKENS.spacing.lg, TOKENS.spacing.md, TOKENS.spacing.lg, TOKENS.spacing.md
+        )
+        self.content_layout.setSpacing(TOKENS.spacing.xs)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mode_label = QLabel("Работа", self)
         self.mode_label.setProperty("role", "mode")
         self.mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mode_label.setWordWrap(True)
         self.mode_label.setVisible(show_mode)
-        layout.addWidget(self.mode_label)
+        self.content_layout.addWidget(self.mode_label)
         self.time_label = QLabel("00:25:00", self)
         self.time_label.setProperty("role", "timer")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_label.setMinimumHeight(round(base_font_size * 1.45))
-        layout.addWidget(self.time_label, 1)
+        self._reserve_timer_height()
+        self.content_layout.addWidget(self.time_label, 1)
         self.status_label = QLabel("", self)
         self.status_label.setProperty("role", "caption")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setWordWrap(True)
         self.status_label.hide()
-        layout.addWidget(self.status_label)
+        self.content_layout.addWidget(self.status_label)
         theme_manager.register(self._apply_theme)
         self._apply_fonts(1.0)
 
@@ -78,7 +80,7 @@ class TimerVisual(QWidget):
         self._base_font_size = max(12, int(size))
         if mode_size is not None:
             self._mode_font_size = max(9, int(mode_size))
-        self.time_label.setMinimumHeight(round(self._base_font_size * 1.45))
+        self._reserve_timer_height()
         self._apply_fonts(self._frame.digit_scale)
 
     def set_state(
@@ -123,12 +125,16 @@ class TimerVisual(QWidget):
         self.time_label.setText(formatted_time)
 
     def _apply_fonts(self, scale: float) -> None:
+        margin = self._responsive_horizontal_margin()
+        self.content_layout.setContentsMargins(
+            margin, TOKENS.spacing.md, margin, TOKENS.spacing.md
+        )
         family = TOKENS.typography.mono if self._mono else TOKENS.typography.family
         requested_size = max(12, round(self._base_font_size * scale))
         timer_font = QFont(family, requested_size)
         timer_font.setWeight(QFont.Weight.Bold)
         timer_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        available_width = max(40, self.width() - (TOKENS.spacing.lg * 2) - 28)
+        available_width = max(40, self.width() - (margin * 2))
         sample = self.time_label.text() or "+00:00:00"
         while requested_size > 12 and QFontMetrics(timer_font).horizontalAdvance(sample) > available_width:
             requested_size -= 1
@@ -137,6 +143,31 @@ class TimerVisual(QWidget):
         mode_font = QFont(TOKENS.typography.family, self._mode_font_size)
         mode_font.setWeight(QFont.Weight.DemiBold)
         self.mode_label.setFont(mode_font)
+
+    def _reserve_timer_height(self) -> None:
+        """Резервирует место под максимальный масштаб эффекта без скачка компоновки."""
+        family = TOKENS.typography.mono if self._mono else TOKENS.typography.family
+        largest = QFont(family, max(12, round(self._base_font_size * 1.15)))
+        largest.setWeight(QFont.Weight.Bold)
+        self.time_label.setMinimumHeight(QFontMetrics(largest).height() + TOKENS.spacing.xs * 2)
+
+    def _beacon_geometry(self) -> tuple[float, float]:
+        """Радиус и отступ маячка уменьшаются раньше, чем читаемая область цифр."""
+        radius = max(2.5, min(7.0, self.width() / 70.0))
+        inset = max(radius + 3.0, min(13.0, self.width() * 0.04))
+        return radius, inset
+
+    def _responsive_horizontal_margin(self) -> int:
+        if self.width() < 220:
+            margin = TOKENS.spacing.xs
+        elif self.width() < 320:
+            margin = TOKENS.spacing.sm
+        else:
+            margin = TOKENS.spacing.lg
+        if self._frame.beacon_level > 0:
+            radius, inset = self._beacon_geometry()
+            margin = max(margin, round(inset + radius + 3))
+        return margin
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -182,10 +213,10 @@ class TimerVisual(QWidget):
             beacon.setAlphaF(min(1.0, max(0.25, frame.beacon_level)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(beacon)
-            radius = max(3.0, min(7.0, self.width() / 70.0))
+            radius, inset = self._beacon_geometry()
             center_y = self.height() / 2
-            painter.drawEllipse(QPointF(13, center_y), radius, radius)
-            painter.drawEllipse(QPointF(self.width() - 13, center_y), radius, radius)
+            painter.drawEllipse(QPointF(inset, center_y), radius, radius)
+            painter.drawEllipse(QPointF(self.width() - inset, center_y), radius, radius)
 
         if frame.wave_position is not None:
             y = self.height() - max(9, TOKENS.spacing.sm)

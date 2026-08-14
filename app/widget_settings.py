@@ -73,7 +73,7 @@ WIDGET_SIZE_PRESETS: dict[str, dict[str, WidgetSizeParameters]] = {
         WIDGET_SIZE_LARGE: WidgetSizeParameters(400, 230, 48, 13, 11),
     },
     WIDGET_TYPE_EXPANDED: {
-        WIDGET_SIZE_SMALL: WidgetSizeParameters(340, 215, 30, 10, 9),
+        WIDGET_SIZE_SMALL: WidgetSizeParameters(400, 245, 30, 10, 9),
         WIDGET_SIZE_MEDIUM: WidgetSizeParameters(440, 280, 44, 12, 10),
         WIDGET_SIZE_LARGE: WidgetSizeParameters(560, 350, 58, 14, 12),
     },
@@ -102,7 +102,7 @@ WIDGET_SIZE_PRESETS: dict[str, dict[str, WidgetSizeParameters]] = {
 WIDGET_MIN_SIZES: dict[str, tuple[int, int]] = {
     WIDGET_TYPE_MINIMAL: (180, 100),
     WIDGET_TYPE_COMPACT: (230, 135),
-    WIDGET_TYPE_EXPANDED: (330, 205),
+    WIDGET_TYPE_EXPANDED: (330, 245),
     WIDGET_TYPE_MICRO: (160, 88),
     WIDGET_TYPE_ROW: (340, 90),
     WIDGET_TYPE_RING: (205, 230),

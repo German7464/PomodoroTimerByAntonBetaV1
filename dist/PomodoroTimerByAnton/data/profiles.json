@@ -16,8 +16,126 @@
     "autostart_enabled": false,
     "minimize_to_tray_on_start": false,
     "close_to_tray": true,
+    "theme_name": "Comet",
+    "appearance_mode": "light",
+    "custom_theme": {
+      "light": {
+        "background": "#F3F6F5",
+        "card_background": "#FFFFFF",
+        "secondary_background": "#E5ECEA",
+        "text_primary": "#17201E",
+        "text_secondary": "#52615D",
+        "accent": "#0F766E",
+        "accent_hover": "#0B5F59",
+        "button_background": "#E5ECEA",
+        "button_text": "#17201E",
+        "border": "#CBD7D3",
+        "disabled": "#84928E",
+        "focus": "#087E75",
+        "success": "#27754C",
+        "warning": "#805400",
+        "error": "#AA3434",
+        "work": "#0D6F68",
+        "short_break": "#275F9E",
+        "long_break": "#65509A",
+        "overwork": "#9B3651",
+        "short_break_overrun": "#9B3651",
+        "long_break_overrun": "#9B3651",
+        "on_accent": "#FFFFFF"
+      },
+      "dark": {
+        "background": "#101615",
+        "card_background": "#18211F",
+        "secondary_background": "#22302D",
+        "text_primary": "#F2F7F5",
+        "text_secondary": "#B4C2BE",
+        "accent": "#5BC7B8",
+        "accent_hover": "#78D5C9",
+        "button_background": "#22302D",
+        "button_text": "#F2F7F5",
+        "border": "#344541",
+        "disabled": "#70817D",
+        "focus": "#70D7CA",
+        "success": "#6FD39A",
+        "warning": "#F0BD66",
+        "error": "#FF8A8A",
+        "work": "#62C9BB",
+        "short_break": "#7EB8F0",
+        "long_break": "#B9A0F4",
+        "overwork": "#F18AA2",
+        "short_break_overrun": "#F18AA2",
+        "long_break_overrun": "#F18AA2",
+        "on_accent": "#0E1B18"
+      }
+    },
+    "overrun_visual": {
+      "effect": "Пульсация",
+      "color_enabled": true,
+      "scope": "Цифры и карточка",
+      "speed": "Обычно",
+      "intensity": "Средне",
+      "animations_enabled": true,
+      "opaque_widget_during_overrun": false,
+      "colors": {
+        "overwork": null,
+        "short_break_overrun": null,
+        "long_break_overrun": null
+      }
+    },
     "widget_enabled": false,
     "widget_type": "Компактный",
+    "widget_size": "Маленький",
+    "widget_layouts": {
+      "Минималистичный": {
+        "size": "Маленький",
+        "width": 200,
+        "height": 110,
+        "x": 100,
+        "y": 100
+      },
+      "Компактный": {
+        "size": "Маленький",
+        "width": 240,
+        "height": 145,
+        "x": 100,
+        "y": 100
+      },
+      "Расширенный": {
+        "size": "Маленький",
+        "width": 340,
+        "height": 215,
+        "x": 100,
+        "y": 100
+      },
+      "Микро": {
+        "size": "Маленький",
+        "width": 170,
+        "height": 96,
+        "x": 100,
+        "y": 100
+      },
+      "Строка": {
+        "size": "Маленький",
+        "width": 360,
+        "height": 100,
+        "x": 100,
+        "y": 100
+      },
+      "Кольцо": {
+        "size": "Маленький",
+        "width": 220,
+        "height": 250,
+        "x": 100,
+        "y": 100
+      },
+      "Табло": {
+        "size": "Маленький",
+        "width": 300,
+        "height": 145,
+        "x": 100,
+        "y": 100
+      }
+    },
     "widget_background_color": "#202124",
     "widget_text_color": "#ffffff",
     "widget_opacity": 100,

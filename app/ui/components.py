@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import ctypes
+import os
 
 from PySide6.QtCore import (
     Property,
@@ -15,9 +17,20 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import (
+    QColor,
+    QFocusEvent,
+    QFont,
+    QFontMetrics,
+    QKeyEvent,
+    QMouseEvent,
+    QPaintEvent,
+    QPainter,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -27,6 +40,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +58,27 @@ def repolish(widget: QWidget) -> None:
     style.unpolish(widget)
     style.polish(widget)
     widget.update()
+
+
+def interface_animations_enabled() -> bool:
+    """Учитывает настройку приложения и системное уменьшение движения Windows."""
+    application = QApplication.instance()
+    if application is not None and application.property("animationsEnabled") is False:
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        enabled = ctypes.c_int(1)
+        # SPI_GETCLIENTAREAANIMATION — документированная настройка анимаций UI Windows.
+        result = ctypes.windll.user32.SystemParametersInfoW(
+            0x1042,
+            0,
+            ctypes.byref(enabled),
+            0,
+        )
+    except (AttributeError, OSError):
+        return True
+    return bool(enabled.value) if result else True
 
 
 class FlowLayout(QLayout):
@@ -191,14 +228,25 @@ class AppButton(QPushButton):
         variant: str = "secondary",
         icon_name: str | None = None,
         theme_manager: ThemeManager | None = None,
+        reserved_texts: tuple[str, ...] = (),
+        animations_enabled: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(text, parent)
         self.setProperty("variant", variant)
+        self.setProperty("keyboardFocus", False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(TOKENS.controls.height)
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._icon_name = icon_name
         self._theme_manager = theme_manager
+        self._reserved_texts = tuple(str(value) for value in reserved_texts)
+        self._animations_enabled = animations_enabled
+        self._press_progress = 0.0
+        self._press_animation = QPropertyAnimation(self, b"pressProgress", self)
+        self._press_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.pressed.connect(self._animate_press_in)
+        self.released.connect(self._animate_press_out)
         if theme_manager is not None:
             theme_manager.register(self._apply_theme)
 
@@ -214,16 +262,154 @@ class AppButton(QPushButton):
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         base = super().sizeHint()
-        metrics = QFontMetrics(self.font())
-        width = metrics.horizontalAdvance(self.text()) + TOKENS.spacing.md * 2
-        if self._icon_name is not None:
-            width += 20 + TOKENS.spacing.xs
+        width = max(
+            self.width_for_text(value)
+            for value in (self.text(), *self._reserved_texts)
+        )
         return QSize(max(base.width(), width), max(base.height(), TOKENS.controls.height))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return self.sizeHint()
 
+    def width_for_text(self, text: str) -> int:
+        """Ширина подписи с реальными font metrics, иконкой и безопасными полями."""
+        metrics = QFontMetrics(self.font())
+        current_text_width = metrics.horizontalAdvance(self.text())
+        # Qt/QSS уже учитывает рамку, внутренние поля и иконку в штатном sizeHint.
+        # Выделяем эту «обвязку», чтобы другая (в том числе локализованная) подпись
+        # получила те же поля при любом DPI и стиле платформы.
+        chrome_width = max(
+            TOKENS.spacing.md * 2,
+            super().sizeHint().width() - current_text_width,
+        )
+        return metrics.horizontalAdvance(str(text)) + chrome_width
+
+    def activate_from_keyboard(self) -> bool:
+        """Визуально нажимает кнопку и запускает тот же clicked-handler, что мышь."""
+        if not self.isEnabled() or not self.isVisible():
+            return False
+        self._set_keyboard_focus(True)
+        self.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.animateClick()
+        return True
+
+    def _motion_enabled(self) -> bool:
+        return interface_animations_enabled() and (
+            self._animations_enabled is None or bool(self._animations_enabled())
+        )
+
+    def _animate_press_in(self) -> None:
+        self._animate_press_to(1.0, max(60, TOKENS.motion.fast_ms // 2))
+
+    def _animate_press_out(self) -> None:
+        self._animate_press_to(0.0, TOKENS.motion.fast_ms)
+
+    def _animate_press_to(self, target: float, duration_ms: int) -> None:
+        self._press_animation.stop()
+        if not self._motion_enabled():
+            self._set_press_progress(0.0)
+            return
+        self._press_animation.setDuration(max(1, int(duration_ms)))
+        self._press_animation.setStartValue(self._press_progress)
+        self._press_animation.setEndValue(max(0.0, min(1.0, float(target))))
+        self._press_animation.start()
+
+    def _get_press_progress(self) -> float:
+        return self._press_progress
+
+    def _set_press_progress(self, value: float) -> None:
+        normalized = max(0.0, min(1.0, float(value)))
+        if abs(normalized - self._press_progress) < 0.001:
+            return
+        self._press_progress = normalized
+        self.update()
+
+    pressProgress = Property(float, _get_press_progress, _set_press_progress)
+
+    @property
+    def press_progress(self) -> float:
+        """Диагностическое состояние для Qt-тестов без привязки к таймеру."""
+        return self._press_progress
+
+    def _set_keyboard_focus(self, visible: bool) -> None:
+        normalized = bool(visible)
+        if bool(self.property("keyboardFocus")) == normalized:
+            return
+        self.setProperty("keyboardFocus", normalized)
+        # Рамка рисуется поверх кнопки: QSS-repolish здесь сбрасывал локальный
+        # размер шрифта виджета и менял компоновку в момент нажатия Space.
+        self.update()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt API
+        keyboard_reasons = {
+            Qt.FocusReason.TabFocusReason,
+            Qt.FocusReason.BacktabFocusReason,
+            Qt.FocusReason.ShortcutFocusReason,
+        }
+        self._set_keyboard_focus(event.reason() in keyboard_reasons)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt API
+        self._set_keyboard_focus(False)
+        super().focusOutEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        self._set_keyboard_focus(False)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.isAutoRepeat():
+            if self.activate_from_keyboard():
+                event.accept()
+            return
+        if event.key() == Qt.Key.Key_Space:
+            self._set_keyboard_focus(True)
+        super().keyPressEvent(event)
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802 - Qt API
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        if self._press_progress > 0.001:
+            option.state |= QStyle.StateFlag.State_Sunken
+        painter = QStylePainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.save()
+        scale = 1.0 - (0.025 * self._press_progress)
+        center = self.rect().center()
+        painter.translate(center)
+        painter.scale(scale, scale)
+        painter.translate(-center)
+        painter.setOpacity(1.0 - (0.06 * self._press_progress))
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        painter.restore()
+        if bool(self.property("keyboardFocus")) and self.isEnabled():
+            painter.setOpacity(1.0)
+            focus_color = QColor(
+                self._theme_manager.palette.focus
+                if self._theme_manager is not None
+                else self.palette().highlight().color()
+            )
+            painter.setPen(QPen(focus_color, TOKENS.focus_width + 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            inset = (TOKENS.focus_width + 1) / 2 + 1
+            focus_rect = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+            radius = max(2, TOKENS.radii.control - 1)
+            painter.drawRoundedRect(focus_rect, radius, radius)
+            contrast_color = QColor(
+                self._theme_manager.palette.on_accent
+                if self._theme_manager is not None and self.property("variant") == "primary"
+                else (
+                    self._theme_manager.palette.text_primary
+                    if self._theme_manager is not None
+                    else self.palette().windowText().color()
+                )
+            )
+            inner = focus_rect.adjusted(2.5, 2.5, -2.5, -2.5)
+            painter.setPen(QPen(contrast_color, 1))
+            painter.drawRoundedRect(inner, max(2, radius - 2), max(2, radius - 2))
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._press_animation.stop()
         if self._theme_manager is not None:
             self._theme_manager.unregister(self._apply_theme)
         super().closeEvent(event)
