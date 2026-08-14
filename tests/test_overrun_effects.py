@@ -39,6 +39,7 @@ from app.theme import APPEARANCE_DARK, APPEARANCE_LIGHT, get_palette
 from app.timer_engine import TimerEngine
 from app.ui.main_window import MainWindow
 from tests.test_timer_engine import make_settings
+from tests.qt_helpers import isolated_main
 
 
 class FakeScheduler:
@@ -418,9 +419,8 @@ class OverrunEffectsTests(unittest.TestCase):
         self.assertEqual(frames[-1], INACTIVE_FRAME)
 
     def test_main_and_widget_receive_the_same_frame_object(self) -> None:
-        window = MainWindow.__new__(MainWindow)
-        window.theme_manager = FakeThemeManager()
-        window.widget_window = FakeWidgetWindow()
+        settings = make_settings()
+        settings.widget_enabled = True
         frame = OverrunVisualFrame(
             active=True,
             mode=TimerMode.WORK,
@@ -428,10 +428,10 @@ class OverrunEffectsTests(unittest.TestCase):
             card_background="#654321",
         )
 
-        window._apply_overrun_visual_frame(frame)
-
-        self.assertEqual(window.theme_manager.calls[-1], ("#123456", "#654321"))
-        self.assertIs(window.widget_window.frames[-1], frame)
+        with isolated_main(settings) as (window, _path, _statistics):
+            window._apply_overrun_visual_frame(frame)
+            self.assertIs(window.timer_visual.visual_frame, frame)
+            self.assertIs(window.widget_window.view.overrun_frame, frame)
 
 
 if __name__ == "__main__":

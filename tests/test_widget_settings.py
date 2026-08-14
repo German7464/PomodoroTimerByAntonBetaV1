@@ -49,6 +49,7 @@ from app.widget_settings import (
     widget_size_parameters,
 )
 from tests.test_timer_engine import finish_current_period, make_settings
+from tests.qt_helpers import APP, isolated_main
 
 
 class WidgetSettingsTests(unittest.TestCase):
@@ -211,16 +212,18 @@ class WidgetSettingsTests(unittest.TestCase):
         )
 
     def test_scale_frame_does_not_request_a_window_resize(self) -> None:
-        widget = WidgetWindow.__new__(WidgetWindow)
-        widget.window = object()
-        widget.view = object()
-        widget._overrun_frame = OverrunVisualFrame(
+        settings = make_settings()
+        settings.widget_enabled = True
+        frame = OverrunVisualFrame(
             active=True,
             effect=EFFECT_SCALE,
             digit_scale=1.15,
         )
-
-        widget._fit_window_to_content()
+        with isolated_main(settings) as (window, _path, _statistics):
+            size = window.widget_window.window.size()
+            window.widget_window.apply_overrun_visual(frame)
+            APP.processEvents()
+            self.assertEqual(window.widget_window.window.size(), size)
 
     def test_display_state_preserves_normal_and_overrun_text_for_all_views(self) -> None:
         timer = TimerEngine(make_settings())

@@ -12,7 +12,7 @@ from app.single_instance import (
 
 
 class RunnableWindow(Protocol):
-    """Минимальный контракт окна для тестирования точки входа без Tk."""
+    """Минимальный контракт окна для тестирования точки входа без GUI."""
 
     def run(self) -> None:
         """Запускает цикл приложения."""
@@ -23,7 +23,7 @@ def main(
     window_factory: Callable[[], RunnableWindow] | None = None,
     message_function: Callable[..., None] = show_native_message,
 ) -> int:
-    """Получает mutex до импорта Tkinter и запускает только первый экземпляр."""
+    """Получает mutex до импорта Qt и запускает только первый экземпляр."""
     lock = lock_factory()
     try:
         acquired = lock.acquire()
@@ -37,7 +37,7 @@ def main(
 
     try:
         if window_factory is None:
-            # Импорт отложен: второй процесс не создает Tk root и не загружает
+            # Импорт отложен: второй процесс не создает QApplication и не загружает
             # настройки/трей перед проверкой единственного экземпляра.
             from app.ui.main_window import MainWindow
 

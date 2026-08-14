@@ -1,35 +1,36 @@
-"""Уведомления о завершении периодов таймера."""
+"""Тематизированные уведомления о завершении периодов на Qt Widgets."""
 
 from collections.abc import Callable
-import tkinter as tk
-from tkinter import ttk
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QVBoxLayout, QWidget
 
 from app.models import AppSettings, TimerMode
 from app.theme import ThemeManager
+from app.ui.components import AppButton, Card
+from app.ui.design_system import TOKENS
 
 try:
     import winsound
-except ImportError:  # pragma: no cover - на не-Windows системах winsound недоступен.
+except ImportError:  # pragma: no cover
     winsound = None
 
 
 class NotificationService:
-    """Показывает уведомления о периодах без сторонних библиотек."""
+    """Показывает одно доступное уведомление без изменения TimerEngine."""
 
     def __init__(
         self,
-        parent: tk.Tk,
+        parent: QWidget,
         settings: AppSettings,
         theme_manager: ThemeManager | None = None,
     ) -> None:
-        """Запоминает главное окно, чтобы показывать уведомления поверх него."""
         self.parent = parent
         self.settings = settings
         self.theme_manager = theme_manager
-        self._active_window: tk.Toplevel | None = None
+        self._active_window: QDialog | None = None
 
     def update_settings(self, settings: AppSettings) -> None:
-        """Применяет новые настройки уведомлений."""
         self.settings = settings
 
     def notify_period_finished(
@@ -38,56 +39,43 @@ class NotificationService:
         next_mode: TimerMode,
         on_continue: Callable[[], None],
     ) -> None:
-        """Показывает уведомление с поведением под автоматический или ручной режим."""
         if not self.settings.notifications_enabled:
             return
-
         if self.settings.notification_sound_enabled:
             self.play_sound()
-
         message = self._build_message(completed_mode, next_mode)
         if self.settings.auto_start_next_period:
-            self._show_popup(message=message, button_text="Закрыть", command=None)
+            self._show_popup(message, "Закрыть", None)
         else:
-            self._show_popup(message=message, button_text="Продолжить", command=on_continue)
+            self._show_popup(message, "Продолжить", on_continue)
 
     def play_sound(self) -> None:
-        """Воспроизводит стандартный системный звук Windows, если он доступен."""
         if winsound is not None:
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         else:
-            self.parent.bell()
+            QApplication.beep()
 
     def dismiss(self) -> None:
-        """Закрывает активное уведомление, не продолжая таймер автоматически."""
-        if self._active_window is not None:
-            self._destroy_popup(self._active_window)
+        window = self._active_window
+        self._active_window = None
+        if window is not None:
+            window.close()
+            window.deleteLater()
 
     def _build_message(self, completed_mode: TimerMode, next_mode: TimerMode) -> str:
-        """Собирает понятный текст уведомления с учетом режима перехода."""
         completed_text = self._completed_period_text(completed_mode)
         next_text = next_mode.value.lower()
-
         if self.settings.auto_start_next_period:
-            return (
-                f"{completed_text}\n"
-                "Режим: автоматический переход.\n"
-                f"Следующий период уже запущен: {next_text}."
-            )
+            return f"{completed_text}\n\nСледующий период уже запущен: {next_text}."
+        return f"{completed_text}\n\nНажмите «Продолжить», чтобы начать {next_text}."
 
-        return (
-            f"{completed_text}\n"
-            "Режим: ручной переход.\n"
-            f"Нажмите «Продолжить», чтобы начать {next_text}."
-        )
-
-    def _completed_period_text(self, mode: TimerMode) -> str:
-        """Возвращает строку о завершенном периоде."""
+    @staticmethod
+    def _completed_period_text(mode: TimerMode) -> str:
         if mode == TimerMode.WORK:
-            return "Рабочий период завершен."
+            return "Рабочий период завершён."
         if mode == TimerMode.SHORT_BREAK:
-            return "Короткий отдых завершен."
-        return "Длинный отдых завершен."
+            return "Короткий отдых завершён."
+        return "Длинный отдых завершён."
 
     def _show_popup(
         self,
@@ -95,52 +83,45 @@ class NotificationService:
         button_text: str,
         command: Callable[[], None] | None,
     ) -> None:
-        """Создает аккуратное окно уведомления с одной главной кнопкой."""
         self.dismiss()
-        window = tk.Toplevel(self.parent)
+        window = QDialog(self.parent, Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
         self._active_window = window
-        window.title("Pomodoro Timer")
-        window.resizable(False, False)
-        window.transient(self.parent)
-        window.attributes("-topmost", True)
-
-        frame = ttk.Frame(window, padding=20, style="Card.TFrame")
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(
-            frame,
-            text=message,
-            wraplength=360,
-            justify=tk.LEFT,
-            style="Card.TLabel",
-        ).pack(pady=(0, 16))
+        window.setWindowTitle("Pomodoro Timer")
+        window.setModal(False)
+        window.setMinimumWidth(410)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        layout = QVBoxLayout(window)
+        layout.setContentsMargins(TOKENS.spacing.md, TOKENS.spacing.md, TOKENS.spacing.md, TOKENS.spacing.md)
+        card = Card(window, padding=TOKENS.spacing.lg)
+        label = QLabel(message, card)
+        label.setWordWrap(True)
+        label.setProperty("role", "subtitle")
+        card.content_layout.addWidget(label)
+        button = AppButton(
+            button_text,
+            card,
+            variant="primary",
+            theme_manager=self.theme_manager,
+        )
 
         def handle_button() -> None:
-            # В ручном режиме callback выполняет единый переход и запись
-            # статистики. Закрытие крестиком этот callback не вызывает.
+            window.accept()
             if command is not None:
                 command()
-            self._destroy_popup(window)
 
-        ttk.Button(
-            frame,
-            text=button_text,
-            command=handle_button,
-            style="Accent.TButton",
-        ).pack(anchor=tk.E)
-        window.protocol("WM_DELETE_WINDOW", lambda: self._destroy_popup(window))
-        if self.theme_manager is not None:
-            self.theme_manager.apply_to_window(window)
-
+        button.clicked.connect(handle_button)
+        card.content_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(card)
+        window.finished.connect(lambda _result, target=window: self._clear_if_active(target))
+        window.show()
+        window.raise_()
+        window.activateWindow()
         if self.settings.auto_start_next_period:
-            window.after(10000, lambda: self._destroy_popup(window))
+            timeout = QTimer(window)
+            timeout.setSingleShot(True)
+            timeout.timeout.connect(window.close)
+            timeout.start(10_000)
 
-    def _destroy_popup(self, window: tk.Toplevel) -> None:
-        """Безопасно уничтожает окно и очищает ссылку на него."""
-        try:
-            if window.winfo_exists():
-                window.destroy()
-        except tk.TclError:
-            pass
+    def _clear_if_active(self, window: QDialog) -> None:
         if self._active_window is window:
             self._active_window = None

@@ -226,7 +226,7 @@ def calculate_overrun_frame(
     visual: object,
     elapsed_seconds: float,
 ) -> OverrunVisualFrame:
-    """Рассчитывает кадр без обращения к Tkinter, таймеру и статистике."""
+    """Рассчитывает кадр без обращения к GUI, таймеру и статистике."""
     settings = normalize_overrun_visual(visual)
     effect = settings["effect"]
     scope = settings["scope"]
@@ -464,5 +464,5 @@ class OverrunVisualController:
         try:
             self._cancel(after_id)
         except Exception:
-            # Tk может уже уничтожать окно; состояние всё равно очищено локально.
+            # GUI может уже уничтожать планировщик; состояние очищено локально.
             pass

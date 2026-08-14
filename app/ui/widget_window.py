@@ -1,15 +1,23 @@
-"""Плавающий адаптивный виджет общего Pomodoro-таймера."""
+"""Единственное Qt-окно с семью представлениями общего Pomodoro-таймера."""
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-import tkinter as tk
+
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.models import AppSettings, TimerMode, TimeDisplayFormat
 from app.overrun_effects import INACTIVE_FRAME, OverrunVisualFrame
 from app.theme import ThemeManager, ThemePalette, mode_color
 from app.timer_engine import TimerEngine
-from app.ui.overrun_surface import draw_beacon, draw_wave
+from app.ui.components import AppButton, Card
+from app.ui.design_system import TOKENS
+from app.ui.qt_app import Debouncer
+from app.ui.timer_visual import TimerVisual
 from app.widget_settings import (
     WIDGET_MIN_SIZES,
     WIDGET_SIZE_CUSTOM,
@@ -22,7 +30,6 @@ from app.widget_settings import (
     WIDGET_TYPE_SCOREBOARD,
     WidgetSizeParameters,
     clamp_window_position,
-    content_fitted_dimensions,
     effective_widget_alpha,
     normalize_widget_layouts,
     normalize_widget_type,
@@ -32,8 +39,6 @@ from app.widget_settings import (
 
 @dataclass(frozen=True)
 class WidgetActions:
-    """Команды главного окна, доступные представлениям виджета."""
-
     toggle_timer: Callable[[], None]
     continue_period: Callable[[], None]
     skip_period: Callable[[], None]
@@ -43,8 +48,6 @@ class WidgetActions:
 
 @dataclass(frozen=True)
 class WidgetDisplayState:
-    """Единая модель отображения для всех семи разметок."""
-
     mode_name: str
     formatted_time: str
     completed_work_periods: int
@@ -53,7 +56,6 @@ class WidgetDisplayState:
 
 
 def widget_display_state(timer: TimerEngine) -> WidgetDisplayState:
-    """Собирает UI-модель, включая знак плюс и название превышения из ядра."""
     if timer.state.waiting_for_continue:
         primary_text = "Продолжить"
     elif timer.state.is_running:
@@ -63,16 +65,12 @@ def widget_display_state(timer: TimerEngine) -> WidgetDisplayState:
     else:
         primary_text = "Старт"
     return WidgetDisplayState(
-        mode_name=timer.mode_name(),
-        formatted_time=timer.formatted_time(),
-        completed_work_periods=timer.state.completed_work_periods,
-        waiting_for_continue=timer.state.waiting_for_continue,
-        primary_text=primary_text,
+        timer.mode_name(), timer.formatted_time(), timer.state.completed_work_periods,
+        timer.state.waiting_for_continue, primary_text,
     )
 
 
 def ring_progress(timer: TimerEngine) -> float | None:
-    """Возвращает ход периода 0..1 или отдельный режим превышения."""
     if timer.state.waiting_for_continue:
         return None
     duration = max(1, timer.current_period_duration_seconds())
@@ -80,577 +78,246 @@ def ring_progress(timer: TimerEngine) -> float | None:
     return min(1.0, max(0.0, elapsed / duration))
 
 
-class WidgetView:
-    """Общая основа разметок внутри единственного окна виджета."""
+class WidgetView(QWidget):
+    """Общая основа без таймера и без анимационного цикла."""
 
-    def __init__(
-        self,
-        parent: tk.Widget,
-        timer: TimerEngine,
-        actions: WidgetActions,
-    ) -> None:
+    def __init__(self, parent: QWidget, timer: TimerEngine, actions: WidgetActions, theme_manager: ThemeManager) -> None:
+        super().__init__(parent)
         self.timer = timer
         self.actions = actions
-        self.frame = tk.Frame(parent, borderwidth=0, highlightthickness=3)
-        self.frame.pack(fill=tk.BOTH, expand=True)
-        self.mode_label: tk.Label
-        self.time_label: tk.Label
-        self.buttons: list[tk.Button] = []
-        self.accent_buttons: list[tk.Button] = []
-        self.palette: ThemePalette | None = None
-        self.drag_widgets: list[tk.Widget] = [self.frame]
+        self.theme_manager = theme_manager
+        self.timer_visual: TimerVisual
+        self.primary_button: AppButton | None = None
         self.overrun_frame = INACTIVE_FRAME
-        self.base_time_font = 18
-        self.time_font_family = "Segoe UI Semibold"
-        self.time_font_weight = "normal"
-        self.left_beacon = tk.Canvas(
-            self.frame,
-            width=16,
-            height=16,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.right_beacon = tk.Canvas(
-            self.frame,
-            width=16,
-            height=16,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.wave_canvas = tk.Canvas(
-            self.frame,
-            height=8,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.drag_widgets.extend(
-            (self.left_beacon, self.right_beacon, self.wave_canvas),
-        )
-        for canvas in (self.left_beacon, self.right_beacon, self.wave_canvas):
-            canvas.bind("<Configure>", lambda _event: self._draw_effect_indicators())
 
-    def update(self) -> None:
-        """Подставляет состояние общего TimerEngine в готовую разметку."""
-        if self.overrun_frame.preview:
-            self.apply_overrun_visual(self.overrun_frame)
-            return
+    def update_view(self) -> None:
         display = widget_display_state(self.timer)
-        self.mode_label.config(text=display.mode_name)
-        self.time_label.config(text=display.formatted_time)
-        self._apply_state_colors()
-        self._apply_overrun_frame()
-
-    def apply_style(
-        self,
-        palette: ThemePalette,
-        parameters: WidgetSizeParameters,
-    ) -> None:
-        """Применяет цвета и адаптивные шрифты ко всем общим элементам."""
-        self.palette = palette
-        self.base_time_font = parameters.time_font
-        background = palette.card_background
-        self.frame.configure(
-            bg=background,
-            highlightbackground=background,
-            highlightcolor=background,
+        self.timer_visual.set_state(
+            display.mode_name, display.formatted_time, self.timer.state.mode,
+            display.waiting_for_continue,
         )
-        self.mode_label.configure(
-            bg=background,
-            font=("Segoe UI Semibold", parameters.mode_font),
-        )
-        self.time_label.configure(
-            bg=background,
-            font=(self.time_font_family, parameters.time_font, self.time_font_weight),
-        )
-        for canvas in (self.left_beacon, self.right_beacon, self.wave_canvas):
-            canvas.configure(bg=background)
-        for button in self.buttons:
-            is_accent = button in self.accent_buttons
-            button.configure(
-                bg=palette.accent if is_accent else palette.secondary_background,
-                fg=palette.on_accent if is_accent else palette.text_primary,
-                activebackground=palette.accent_hover,
-                activeforeground=palette.on_accent,
-                disabledforeground=palette.disabled,
-                highlightbackground=palette.border,
-                highlightcolor=palette.focus,
-                highlightthickness=1,
-                font=("Segoe UI Semibold", parameters.button_font),
-            )
-        self._apply_state_colors()
-        self._apply_overrun_frame()
+        if self.primary_button is not None:
+            self.primary_button.setText(display.primary_text)
+            self.primary_button.setVisible(self._primary_visible(display))
+        self._after_update(display)
 
-    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
-        """Применяет общий кадр, не создавая собственного цикла анимации."""
-        self.overrun_frame = frame
-        if frame.preview and frame.mode is not None:
-            names = {
-                TimerMode.WORK: "Переработка",
-                TimerMode.SHORT_BREAK: "Короткий отдых сверх нормы",
-                TimerMode.LONG_BREAK: "Длинный отдых сверх нормы",
-            }
-            self.mode_label.config(text=names[frame.mode])
-            self.time_label.config(
-                text="+00:03"
-                if self.timer.settings.time_display_format == TimeDisplayFormat.MINUTES_SECONDS.value
-                else "+00:00:03",
-            )
-        elif not frame.preview:
-            display = widget_display_state(self.timer)
-            self.mode_label.config(text=display.mode_name)
-            self.time_label.config(text=display.formatted_time)
-        self._apply_state_colors()
-        self._apply_overrun_frame()
+    def _after_update(self, _display: WidgetDisplayState) -> None:
+        pass
 
-    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
-        """Возвращает поверхности, относящиеся только к карточке виджета."""
-        return (self.frame, self.mode_label, self.time_label)
-
-    def _apply_overrun_frame(self) -> None:
-        if self.palette is None:
-            return
-        frame = self.overrun_frame
-        background = frame.card_background or self.palette.card_background
-        for widget in self._effect_background_widgets():
-            widget.configure(bg=background)
-        if frame.digits_color is not None:
-            self.time_label.configure(fg=frame.digits_color)
-        scaled_font = max(8, round(self.base_time_font * frame.digit_scale))
-        self.time_label.configure(
-            font=(self.time_font_family, scaled_font, self.time_font_weight),
-        )
-        border = frame.border_color or background
-        self.frame.configure(highlightbackground=border, highlightcolor=border)
-        self._draw_effect_indicators()
-
-    def _draw_effect_indicators(self) -> None:
-        """Рисует структурные эффекты из общего кадра без after()."""
-        if self.palette is None:
-            return
-        frame = self.overrun_frame
-        if frame.beacon_level > 0.0:
-            self.left_beacon.place(relx=0.06, rely=0.5, anchor=tk.CENTER)
-            self.right_beacon.place(relx=0.94, rely=0.5, anchor=tk.CENTER)
-            tk.Misc.tkraise(self.left_beacon)
-            tk.Misc.tkraise(self.right_beacon)
-        else:
-            self.left_beacon.place_forget()
-            self.right_beacon.place_forget()
-        small = self.frame.winfo_width() < 230
-        draw_beacon(self.left_beacon, frame, self.palette, small=small)
-        draw_beacon(self.right_beacon, frame, self.palette, small=small)
-
-        if frame.wave_position is not None:
-            self.wave_canvas.place(
-                relx=0.5,
-                rely=0.72,
-                relwidth=0.68,
-                anchor=tk.CENTER,
-            )
-            tk.Misc.tkraise(self.wave_canvas)
-        else:
-            self.wave_canvas.place_forget()
-        draw_wave(self.wave_canvas, frame, self.palette)
-
-    def _apply_state_colors(self) -> None:
-        """Обновляет семантический цвет режима при обычном тике и превышении."""
-        if self.palette is None:
-            return
-        preview_mode = self.overrun_frame.mode if self.overrun_frame.preview else None
-        state_color = mode_color(
-            self.palette,
-            preview_mode or self.timer.state.mode,
-            self.timer.state.waiting_for_continue or preview_mode is not None,
-        )
-        self.mode_label.configure(fg=state_color)
-        # Базовые цифры остаются обычными: их цвет меняет только выбранная
-        # область эффекта. Название режима и знак «+» различают состояние всегда.
-        self.time_label.configure(fg=self.palette.text_primary)
-
-    def destroy(self) -> None:
-        """Удаляет только содержимое, сохраняя Toplevel и TimerEngine."""
-        self.frame.destroy()
-
-    def _primary_text(self) -> str:
-        """Возвращает подпись основной кнопки по текущему состоянию."""
-        return widget_display_state(self.timer).primary_text
+    def _primary_visible(self, _display: WidgetDisplayState) -> bool:
+        return True
 
     def _handle_primary(self) -> None:
-        """Направляет превышение в общий обработчик, остальные состояния — в toggle."""
         if self.timer.state.waiting_for_continue:
             self.actions.continue_period()
         else:
             self.actions.toggle_timer()
 
-    def _button(
-        self,
-        parent: tk.Widget,
-        text: str,
-        command: Callable[[], None],
-        *,
-        accent: bool = False,
-    ) -> tk.Button:
-        """Создает одинаковую доступную кнопку без отдельной ttk-темы."""
-        button = tk.Button(
-            parent,
-            text=text,
-            command=command,
-            relief=tk.FLAT,
-            borderwidth=0,
-            cursor="hand2",
-            takefocus=True,
+    def apply_style(self, _palette: ThemePalette, parameters: WidgetSizeParameters) -> None:
+        self.timer_visual.set_base_font_size(parameters.time_font, parameters.mode_font)
+        if self.primary_button is not None:
+            font = self.primary_button.font()
+            font.setPointSize(parameters.button_font)
+            self.primary_button.setFont(font)
+
+    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        self.overrun_frame = frame
+        self.timer_visual.apply_overrun_frame(
+            frame,
+            short_format=self.timer.settings.time_display_format == TimeDisplayFormat.MINUTES_SECONDS.value,
         )
-        self.buttons.append(button)
-        if accent:
-            self.accent_buttons.append(button)
-        return button
+        self.update_view()
 
 
 class MinimalWidgetView(WidgetView):
-    """Минимум элементов: состояние, крупное время и продолжение превышения."""
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=28, mode_font_size=10)
+        layout.addWidget(self.timer_visual, 1)
+        self.primary_button = AppButton("Продолжить", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button)
 
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=3)
-
-        self.mode_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.mode_label.grid(row=0, column=0, sticky=tk.NSEW, padx=10, pady=(8, 0))
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=10)
-        self.continue_button = self._button(
-            self.frame,
-            "Продолжить",
-            self.actions.continue_period,
-            accent=True,
-        )
-        self.continue_button.grid(row=2, column=0, padx=12, pady=(0, 8))
-        self.drag_widgets.extend((self.mode_label, self.time_label))
-
-    def update(self) -> None:
-        super().update()
-        if widget_display_state(self.timer).waiting_for_continue:
-            self.continue_button.grid()
-        else:
-            self.continue_button.grid_remove()
+    def _primary_visible(self, display: WidgetDisplayState) -> bool:
+        return display.waiting_for_continue
 
 
 class CompactWidgetView(WidgetView):
-    """Близкий к прежнему виджет с основной кнопкой старта или паузы."""
-
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=2)
-
-        self.mode_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.mode_label.grid(row=0, column=0, sticky=tk.NSEW, padx=12, pady=(8, 0))
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=12)
-        self.primary_button = self._button(
-            self.frame,
-            "Старт",
-            self._handle_primary,
-            accent=True,
-        )
-        self.primary_button.grid(row=2, column=0, padx=12, pady=(0, 10), ipadx=12)
-        self.drag_widgets.extend((self.mode_label, self.time_label))
-
-    def update(self) -> None:
-        super().update()
-        self.primary_button.config(text=self._primary_text())
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=28, mode_font_size=10)
+        layout.addWidget(self.timer_visual, 1)
+        self.primary_button = AppButton("Старт", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button)
 
 
 class ExpandedWidgetView(WidgetView):
-    """Расширенное представление с циклом и основными командами."""
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=34, mode_font_size=11)
+        layout.addWidget(self.timer_visual, 1)
+        self.cycle_label = QLabel("Завершено рабочих периодов: 0", self)
+        self.cycle_label.setProperty("role", "caption")
+        self.cycle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.cycle_label)
+        buttons = QHBoxLayout()
+        self.primary_button = AppButton("Старт", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        self.skip_button = AppButton("Пропустить", self, variant="ghost", theme_manager=theme_manager)
+        self.skip_button.clicked.connect(actions.skip_period)
+        self.reset_button = AppButton("Сбросить", self, variant="ghost", theme_manager=theme_manager)
+        self.reset_button.clicked.connect(actions.reset_timer)
+        self.open_button = AppButton("Открыть", self, variant="ghost", theme_manager=theme_manager)
+        self.open_button.clicked.connect(actions.show_main_window)
+        for button in (self.primary_button, self.skip_button, self.reset_button, self.open_button):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
 
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=1)
+    def _after_update(self, display: WidgetDisplayState) -> None:
+        self.cycle_label.setText(f"Завершено рабочих периодов: {display.completed_work_periods}")
+        self.skip_button.setEnabled(not display.waiting_for_continue)
+        self.reset_button.setEnabled(not display.waiting_for_continue)
 
-        header = tk.Frame(self.frame, borderwidth=0, highlightthickness=0)
-        header.grid(row=0, column=0, sticky=tk.EW, padx=14, pady=(10, 0))
-        header.columnconfigure(0, weight=1)
-        self.mode_label = tk.Label(header, anchor=tk.W)
-        self.mode_label.grid(row=0, column=0, sticky=tk.W)
-        self.cycle_label = tk.Label(header, anchor=tk.E)
-        self.cycle_label.grid(row=0, column=1, sticky=tk.E)
-
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=14, pady=4)
-
-        controls = tk.Frame(self.frame, borderwidth=0, highlightthickness=0)
-        controls.grid(row=2, column=0, sticky=tk.EW, padx=12, pady=(0, 10))
-        for column in range(4):
-            controls.columnconfigure(column, weight=1)
-        self.primary_button = self._button(
-            controls,
-            "Старт",
-            self._handle_primary,
-            accent=True,
-        )
-        self.primary_button.grid(row=0, column=0, sticky=tk.EW, padx=2)
-        self.skip_button = self._button(controls, "Пропустить", self.actions.skip_period)
-        self.skip_button.grid(row=0, column=1, sticky=tk.EW, padx=2)
-        self.reset_button = self._button(controls, "Сброс", self.actions.reset_timer)
-        self.reset_button.grid(row=0, column=2, sticky=tk.EW, padx=2)
-        self.open_button = self._button(controls, "Открыть", self.actions.show_main_window)
-        self.open_button.grid(row=0, column=3, sticky=tk.EW, padx=2)
-        self.header = header
-        self.controls = controls
-        self.drag_widgets.extend((header, self.mode_label, self.cycle_label, self.time_label))
-
-    def update(self) -> None:
-        super().update()
-        display = widget_display_state(self.timer)
-        self.cycle_label.config(
-            text=f"Рабочих периодов: {display.completed_work_periods}",
-        )
-        self.primary_button.config(text=self._primary_text())
-        protected_state = tk.DISABLED if display.waiting_for_continue else tk.NORMAL
-        self.skip_button.config(state=protected_state)
-        self.reset_button.config(state=protected_state)
-
-    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
-        """Освобождает заголовок только для длинного фиктивного preview-текста."""
-        super().apply_overrun_visual(frame)
-        self.cycle_label.config(
-            text=""
-            if frame.preview
-            else f"Рабочих периодов: {self.timer.state.completed_work_periods}",
-        )
-
-    def apply_style(
-        self,
-        palette: ThemePalette,
-        parameters: WidgetSizeParameters,
-    ) -> None:
+    def apply_style(self, palette, parameters) -> None:
         super().apply_style(palette, parameters)
-        background = palette.card_background
-        for container in (self.header, self.controls):
-            container.configure(bg=background)
-        self.cycle_label.configure(
-            bg=background,
-            fg=palette.text_secondary,
-            font=("Segoe UI", parameters.mode_font),
-        )
-        self._apply_overrun_frame()
-
-    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
-        return super()._effect_background_widgets() + (
-            self.header,
-            self.controls,
-            self.cycle_label,
-        )
+        for button in (self.skip_button, self.reset_button, self.open_button):
+            font = button.font()
+            font.setPointSize(parameters.button_font)
+            button.setFont(font)
 
 
 class MicroWidgetView(WidgetView):
-    """Самый маленький вид: обычный период показывает только время."""
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(2)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=25, mode_font_size=9, show_mode=False)
+        layout.addWidget(self.timer_visual, 1)
+        self.primary_button = AppButton("Продолжить", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button)
 
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=1)
-        self.mode_label = tk.Label(
-            self.frame,
-            anchor=tk.CENTER,
-            justify=tk.CENTER,
-            wraplength=250,
-        )
-        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=8, pady=(5, 0))
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=8, pady=2)
-        self.continue_button = self._button(
-            self.frame,
-            "Продолжить",
-            self.actions.continue_period,
-            accent=True,
-        )
-        self.continue_button.grid(row=2, column=0, padx=8, pady=(0, 6), ipadx=6)
-        self.drag_widgets.extend((self.mode_label, self.time_label))
-        self._sync_overrun_controls(False)
+    def _after_update(self, display: WidgetDisplayState) -> None:
+        self.timer_visual.mode_label.setVisible(display.waiting_for_continue or self.overrun_frame.preview)
 
-    def update(self) -> None:
-        super().update()
-        self._sync_overrun_controls(widget_display_state(self.timer).waiting_for_continue)
-
-    def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
-        super().apply_overrun_visual(frame)
-        self._sync_overrun_controls(frame.active)
-
-    def _sync_overrun_controls(self, active: bool) -> None:
-        if active:
-            self.mode_label.grid()
-            self.continue_button.grid()
-        else:
-            self.mode_label.grid_remove()
-            self.continue_button.grid_remove()
+    def _primary_visible(self, display: WidgetDisplayState) -> bool:
+        return display.waiting_for_continue
 
 
 class RowWidgetView(WidgetView):
-    """Горизонтальный вид с состоянием, временем и одной общей командой."""
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.mode_label = QLabel("Работа", self)
+        self.mode_label.setProperty("role", "mode")
+        self.mode_label.setWordWrap(True)
+        layout.addWidget(self.mode_label, 1)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=26, mode_font_size=9, show_mode=False)
+        layout.addWidget(self.timer_visual, 2)
+        self.primary_button = AppButton("Старт", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button, 1)
+        theme_manager.register(self._apply_row_theme)
 
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.rowconfigure(0, weight=1)
-        self.frame.columnconfigure(0, weight=2)
-        self.frame.columnconfigure(1, weight=3)
-        self.frame.columnconfigure(2, weight=1)
-        self.mode_label = tk.Label(
-            self.frame,
-            anchor=tk.W,
-            justify=tk.LEFT,
-            wraplength=190,
-        )
-        self.mode_label.grid(row=0, column=0, sticky=tk.NSEW, padx=(12, 6), pady=8)
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=0, column=1, sticky=tk.NSEW, padx=6, pady=8)
-        self.primary_button = self._button(
-            self.frame,
-            "Старт",
-            self._handle_primary,
-            accent=True,
-        )
-        self.primary_button.grid(row=0, column=2, sticky=tk.E, padx=(6, 12), pady=8)
-        self.drag_widgets.extend((self.mode_label, self.time_label))
+    def _after_update(self, display: WidgetDisplayState) -> None:
+        self.mode_label.setText(display.mode_name)
+        self._apply_row_theme(self.theme_manager.palette)
 
-    def update(self) -> None:
-        super().update()
-        self.primary_button.config(text=self._primary_text())
+    def _apply_row_theme(self, palette: ThemePalette) -> None:
+        self.mode_label.setStyleSheet(
+            f"color: {mode_color(palette, self.timer.state.mode, self.timer.state.waiting_for_continue)}; background: transparent;"
+        )
+
+
+class RingDisplay(QWidget):
+    def __init__(self, timer: TimerEngine, theme_manager: ThemeManager, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.timer = timer
+        self.theme_manager = theme_manager
+        self.palette = theme_manager.palette
+        self.frame = INACTIVE_FRAME
+        self.progress = 0.0
+        self.overrun = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 28, 28, 28)
+        self.visual = TimerVisual(theme_manager, self, base_font_size=25, mode_font_size=9)
+        self.visual.setStyleSheet("background: transparent;")
+        layout.addWidget(self.visual)
+        theme_manager.register(self._theme_changed)
+
+    def _theme_changed(self, palette: ThemePalette) -> None:
+        self.palette = palette
+        self.update()
+
+    def set_progress(self, progress: float | None) -> None:
+        self.overrun = progress is None
+        self.progress = 1.0 if progress is None else min(1.0, max(0.0, progress))
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = min(self.width(), self.height()) - 14
+        rect = QRect((self.width() - side) // 2, (self.height() - side) // 2, side, side)
+        pen_width = max(5, side // 24)
+        base_pen = QPen(QColor(self.palette.border), pen_width)
+        base_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(base_pen)
+        painter.drawArc(rect, 0, 360 * 16)
+        color = mode_color(self.palette, self.timer.state.mode, self.overrun)
+        if self.frame.effect_color:
+            color = self.frame.effect_color
+        progress_pen = QPen(QColor(color), pen_width)
+        progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(progress_pen)
+        span = 360 if self.overrun else 360 * self.progress
+        painter.drawArc(rect, 90 * 16, -round(span * 16))
 
 
 class RingWidgetView(WidgetView):
-    """Кольцевая шкала текущего периода без отдельного источника времени."""
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.ring = RingDisplay(timer, theme_manager, self)
+        self.timer_visual = self.ring.visual
+        layout.addWidget(self.ring, 1)
+        self.primary_button = AppButton("Старт", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button)
 
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=1)
-        self.mode_label = tk.Label(
-            self.frame,
-            anchor=tk.CENTER,
-            justify=tk.CENTER,
-            wraplength=330,
-        )
-        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=10, pady=(8, 2))
-        self.ring_canvas = tk.Canvas(
-            self.frame,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.ring_canvas.grid(row=1, column=0, sticky=tk.NSEW, padx=12, pady=2)
-        self.time_label = tk.Label(self.ring_canvas, anchor=tk.CENTER)
-        self.time_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        self.primary_button = self._button(
-            self.frame,
-            "Старт",
-            self._handle_primary,
-            accent=True,
-        )
-        self.primary_button.grid(row=2, column=0, padx=12, pady=(3, 9), ipadx=8)
-        self.ring_canvas.bind("<Configure>", self._redraw_ring)
-        self.drag_widgets.extend((self.mode_label, self.ring_canvas, self.time_label))
-
-    def update(self) -> None:
-        super().update()
-        self.primary_button.config(text=self._primary_text())
-        self._redraw_ring()
-
-    def apply_style(
-        self,
-        palette: ThemePalette,
-        parameters: WidgetSizeParameters,
-    ) -> None:
-        super().apply_style(palette, parameters)
-        self.ring_canvas.configure(bg=palette.card_background)
-        self._redraw_ring()
+    def _after_update(self, _display: WidgetDisplayState) -> None:
+        self.ring.set_progress(ring_progress(self.timer))
 
     def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
+        self.ring.frame = frame
         super().apply_overrun_visual(frame)
-        self._redraw_ring()
-
-    def _effect_background_widgets(self) -> tuple[tk.Widget, ...]:
-        return super()._effect_background_widgets() + (self.ring_canvas,)
-
-    def _redraw_ring(self, _event: tk.Event | None = None) -> None:
-        if self.palette is None:
-            return
-        canvas = self.ring_canvas
-        canvas.delete("ring")
-        width = max(40, canvas.winfo_width())
-        height = max(40, canvas.winfo_height())
-        diameter = max(28, min(width, height) - 18)
-        left = (width - diameter) / 2
-        top = (height - diameter) / 2
-        bounds = (left, top, left + diameter, top + diameter)
-        line_width = max(4, round(diameter / 18))
-        canvas.create_oval(
-            *bounds,
-            outline=self.palette.secondary_background,
-            width=line_width,
-            tags="ring",
-        )
-        progress = None if self.overrun_frame.active else ring_progress(self.timer)
-        state_color = (
-            self.overrun_frame.digits_color
-            or mode_color(
-                self.palette,
-                self.overrun_frame.mode or self.timer.state.mode,
-                progress is None,
-            )
-        )
-        extent = -359.9 if progress is None else -359.9 * progress
-        if progress is None or progress > 0:
-            canvas.create_arc(
-                *bounds,
-                start=90,
-                extent=extent,
-                style=tk.ARC,
-                outline=state_color,
-                width=line_width,
-                tags="ring",
-            )
+        self.ring.update()
 
 
 class ScoreboardWidgetView(WidgetView):
-    """Контрастное табло с системным моноширинным шрифтом."""
-
-    def __init__(self, parent: tk.Widget, timer: TimerEngine, actions: WidgetActions) -> None:
-        super().__init__(parent, timer, actions)
-        self.frame.columnconfigure(0, weight=1)
-        self.frame.rowconfigure(1, weight=1)
-        self.mode_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.mode_label.grid(row=0, column=0, sticky=tk.EW, padx=10, pady=(8, 0))
-        self.time_label = tk.Label(self.frame, anchor=tk.CENTER)
-        self.time_label.grid(row=1, column=0, sticky=tk.NSEW, padx=12, pady=2)
-        self.primary_button = self._button(
-            self.frame,
-            "Старт",
-            self._handle_primary,
-            accent=True,
-        )
-        self.primary_button.grid(row=2, column=0, padx=10, pady=(0, 8), ipadx=8)
-        self.drag_widgets.extend((self.mode_label, self.time_label))
-
-    def update(self) -> None:
-        super().update()
-        self.primary_button.config(text=self._primary_text())
-
-    def apply_style(
-        self,
-        palette: ThemePalette,
-        parameters: WidgetSizeParameters,
-    ) -> None:
-        self.time_font_family = "Consolas"
-        self.time_font_weight = "bold"
-        super().apply_style(palette, parameters)
-        self._apply_overrun_frame()
+    def __init__(self, parent, timer, actions, theme_manager) -> None:
+        super().__init__(parent, timer, actions, theme_manager)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.timer_visual = TimerVisual(theme_manager, self, base_font_size=38, mode_font_size=10, mono=True)
+        layout.addWidget(self.timer_visual, 1)
+        self.primary_button = AppButton("Старт", self, variant="primary", theme_manager=theme_manager)
+        self.primary_button.clicked.connect(self._handle_primary)
+        layout.addWidget(self.primary_button)
 
 
-WIDGET_VIEW_CLASSES: dict[str, type[WidgetView]] = {
+VIEW_CLASSES = {
     WIDGET_TYPE_MINIMAL: MinimalWidgetView,
     WIDGET_TYPE_COMPACT: CompactWidgetView,
     WIDGET_TYPE_EXPANDED: ExpandedWidgetView,
@@ -662,18 +329,35 @@ WIDGET_VIEW_CLASSES: dict[str, type[WidgetView]] = {
 
 
 def widget_view_class(widget_type: str) -> type[WidgetView]:
-    """Возвращает класс представления после безопасной нормализации типа."""
-    return WIDGET_VIEW_CLASSES[normalize_widget_type(widget_type)]
+    return VIEW_CLASSES[normalize_widget_type(widget_type)]
+
+
+class WidgetShell(QWidget):
+    geometryChanged = Signal()
+    closeRequested = Signal()
+
+    def moveEvent(self, event) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self.geometryChanged.emit()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.geometryChanged.emit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+        self.hide()
+        self.closeRequested.emit()
 
 
 class WidgetWindow:
-    """Одно окно с переключаемыми представлениями общего TimerEngine."""
+    """Владелец одного переиспользуемого Qt-окна виджета."""
 
     SAVE_DELAY_MS = 500
 
     def __init__(
         self,
-        parent: tk.Tk,
+        parent: QWidget,
         timer: TimerEngine,
         settings: AppSettings,
         actions: WidgetActions,
@@ -682,6 +366,8 @@ class WidgetWindow:
         on_layout_changed: Callable[[AppSettings], None] | None = None,
         theme_manager: ThemeManager | None = None,
     ) -> None:
+        if theme_manager is None:
+            raise ValueError("WidgetWindow требует общий ThemeManager")
         self.parent = parent
         self.timer = timer
         self.settings = settings
@@ -690,400 +376,202 @@ class WidgetWindow:
         self._on_visibility_requested = on_visibility_requested
         self._on_layout_changed = on_layout_changed
         self.theme_manager = theme_manager
-        self.window: tk.Toplevel | None = None
+        self.window: WidgetShell | None = None
         self.view: WidgetView | None = None
         self._active_view_type: str | None = None
-        self._drag_offset_x = 0
-        self._drag_offset_y = 0
-        self._save_after_id: str | None = None
-        self._enable_configure_after_id: str | None = None
-        self._accept_user_configure = False
-        self._programmatic_size: tuple[int, int] | None = None
-        self._last_size: tuple[int, int] | None = None
-        self._content_expanded = False
         self._overrun_frame = INACTIVE_FRAME
-        if self.theme_manager is not None:
-            self.theme_manager.register(self.apply_theme)
+        self._accept_geometry = False
+        self._programmatic_size: tuple[int, int] | None = None
+        self._geometry_debouncer: Debouncer | None = None
+        self._topmost: bool | None = None
+        theme_manager.register(self.apply_theme)
 
     def apply_settings(self, settings: AppSettings) -> None:
-        """Мгновенно применяет вид, размер и прежние параметры без сброса таймера."""
-        previous_settings = getattr(self, "settings", None)
         previous_type = self._active_view_type
-        captured_layout = self._capture_current_layout() if self.window is not None else None
-
+        captured = self._capture_current_layout()
         settings.widget_type = normalize_widget_type(settings.widget_type)
         settings.widget_layouts = normalize_widget_layouts(
-            settings.widget_layouts,
-            legacy_x=settings.widget_x,
-            legacy_y=settings.widget_y,
+            settings.widget_layouts, legacy_x=settings.widget_x, legacy_y=settings.widget_y,
             active_type=settings.widget_type,
         )
-        if captured_layout is not None and previous_type is not None:
-            incoming_layout = settings.widget_layouts[previous_type]
-            if previous_type != settings.widget_type:
-                settings.widget_layouts[previous_type] = captured_layout
-            else:
-                incoming_layout["x"] = captured_layout["x"]
-                incoming_layout["y"] = captured_layout["y"]
-                if previous_settings.widget_size == settings.widget_size:
-                    settings.widget_layouts[previous_type] = captured_layout
-
+        if captured is not None and previous_type is not None and previous_type != settings.widget_type:
+            settings.widget_layouts[previous_type] = captured
         self.settings = settings
         if not settings.widget_enabled:
             if self.window is not None:
-                self.window.withdraw()
+                self.window.hide()
             return
-
         self._ensure_window()
         if self.window is None:
             return
         if self._active_view_type != settings.widget_type:
             self._rebuild_view(settings.widget_type)
-
         layout = settings.widget_layouts[settings.widget_type]
         settings.widget_size = str(layout["size"])
-        width = int(layout["width"])
-        height = int(layout["height"])
-        x, y = clamp_window_position(
-            int(layout["x"]),
-            int(layout["y"]),
-            width,
-            height,
-            self._screen_bounds(),
-        )
-        layout["x"] = x
-        layout["y"] = y
-        settings.widget_x = x
-        settings.widget_y = y
-        minimum_width, minimum_height = WIDGET_MIN_SIZES[settings.widget_type]
-        self.window.minsize(minimum_width, minimum_height)
-        self.window.resizable(True, True)
-        palette = self._palette()
-        self.window.configure(bg=palette.card_background)
-        self.apply_opacity()
-        self.window.attributes("-topmost", settings.widget_always_on_top)
-        self._set_geometry(width, height, x, y)
+        width, height = int(layout["width"]), int(layout["height"])
+        x, y = clamp_window_position(int(layout["x"]), int(layout["y"]), width, height, self._screen_bounds())
+        layout.update({"x": x, "y": y})
+        settings.widget_x, settings.widget_y = x, y
+        self._accept_geometry = False
+        self._programmatic_size = (width, height)
+        minimum = WIDGET_MIN_SIZES[settings.widget_type]
+        self.window.setMinimumSize(*minimum)
+        self._apply_topmost(settings.widget_always_on_top)
+        self.window.resize(width, height)
+        self.window.move(x, y)
         self._apply_view_style(width, height, settings.widget_size)
         self.update()
-        self.window.deiconify()
-        # На Windows layered-window alpha надёжно применяется после mapping.
-        self.window.update_idletasks()
+        self.window.show()
+        self.window.raise_()
         self.apply_opacity()
+        QTimer.singleShot(250, self._enable_geometry_capture)
+
+    def _apply_topmost(self, enabled: bool) -> None:
+        if self.window is None:
+            return
+        enabled = bool(enabled)
+        if self._topmost == enabled:
+            return
+        flags = Qt.WindowType.Tool | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint
+        if enabled:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        visible = self.window.isVisible()
+        self.window.setWindowFlags(flags)
+        self._topmost = enabled
+        if visible:
+            self.window.show()
 
     def update(self) -> None:
-        """Обновляет активное представление без собственного цикла after()."""
-        if (
-            self.window is None
-            or self.view is None
-            or not self.settings.widget_enabled
-        ):
-            return
-        self.view.update()
-        self._fit_window_to_content()
+        if self.view is not None and self.is_visible():
+            self.view.update_view()
 
     def apply_overrun_visual(self, frame: OverrunVisualFrame) -> None:
-        """Передаёт общий кадр текущему виду без нового after-обработчика."""
         self._overrun_frame = frame
-        if self.view is None:
-            return
-        if hasattr(self.view, "apply_overrun_visual"):
+        if self.view is not None:
             self.view.apply_overrun_visual(frame)
-        if self.window is not None:
-            self.window.configure(
-                bg=frame.card_background or self._palette().card_background,
-            )
-            self.apply_opacity()
+        self.apply_opacity()
 
     def apply_opacity(self) -> float:
-        """Применяет постоянный alpha либо временные 1.0 при реальном превышении."""
-        visual = self.settings.overrun_visual
-        opaque_during_overrun = bool(
-            visual.get("opaque_widget_during_overrun", False),
-        ) if isinstance(visual, dict) else False
+        visual = self.settings.overrun_visual if isinstance(self.settings.overrun_visual, dict) else {}
         alpha = effective_widget_alpha(
             self.settings.widget_opacity,
-            opaque_during_overrun,
+            bool(visual.get("opaque_widget_during_overrun", False)),
             self.timer.state.waiting_for_continue,
         )
         if self.window is not None:
-            self.window.attributes("-alpha", alpha)
+            self.window.setWindowOpacity(alpha)
         return alpha
 
     def apply_theme(self, palette: ThemePalette) -> None:
-        """Обновляет открытый виджет без смены типа, геометрии или TimerEngine."""
         if self.window is None or self.view is None:
             return
-        if self.theme_manager is not None:
-            self.theme_manager.apply_to_window(self.window)
-        width = max(1, self.window.winfo_width())
-        height = max(1, self.window.winfo_height())
         parameters = widget_size_parameters(
-            self.settings.widget_type,
-            self.settings.widget_size,
-            width,
-            height,
+            self.settings.widget_type, self.settings.widget_size,
+            self.window.width(), self.window.height(),
         )
         self.view.apply_style(palette, parameters)
-        if hasattr(self.view, "apply_overrun_visual"):
-            self.view.apply_overrun_visual(self._overrun_frame)
-        self.view.update()
-        self._fit_window_to_content()
+        self.view.apply_overrun_visual(self._overrun_frame)
+        self.window.update()
 
     def is_visible(self) -> bool:
-        """Возвращает фактическую видимость единственного Toplevel."""
-        if self.window is None:
-            return False
-        try:
-            return bool(self.window.winfo_exists()) and self.window.state() != "withdrawn"
-        except tk.TclError:
-            return False
+        return self.window is not None and self.window.isVisible()
 
     def discard_window(self) -> None:
-        """Уничтожает частично созданное окно после ошибки показа."""
-        window = self.window
+        if self.window is not None:
+            self.window.closeRequested.disconnect()
+            self.window.deleteLater()
         self.window = None
         self.view = None
         self._active_view_type = None
-        self._accept_user_configure = False
-        self._programmatic_size = None
-        self._last_size = None
-        self._content_expanded = False
-        self._save_after_id = None
-        self._enable_configure_after_id = None
-        if window is None:
-            return
-        try:
-            window.destroy()
-        except tk.TclError:
-            pass
+        self._geometry_debouncer = None
+        self._topmost = None
 
-    def _request_hide(self) -> None:
-        """Передает закрытие крестиком единому контроллеру видимости."""
-        self._on_visibility_requested(False)
+    def close(self) -> None:
+        if self._geometry_debouncer is not None:
+            self._geometry_debouncer.flush()
+        if self.window is not None:
+            self.window.hide()
+            self.window.deleteLater()
+        self.window = None
+        self.view = None
+        self.theme_manager.unregister(self.apply_theme)
+        self._topmost = None
 
     def _ensure_window(self) -> None:
-        """Создает Toplevel один раз за весь срок жизни приложения."""
         if self.window is not None:
             return
-        self.window = tk.Toplevel(self.parent)
-        self.window.title("Виджет Pomodoro")
-        self.window.protocol("WM_DELETE_WINDOW", self._request_hide)
-        self.window.bind("<Configure>", self._on_configure)
+        self.window = WidgetShell(self.parent)
+        self.window.setWindowTitle("Виджет Pomodoro")
+        self.window.closeRequested.connect(lambda: self._on_visibility_requested(False))
+        self.window.geometryChanged.connect(self._on_geometry_changed)
+        self._geometry_debouncer = Debouncer(self.window, self.SAVE_DELAY_MS, self._persist_current_layout)
 
     def _rebuild_view(self, widget_type: str) -> None:
-        """Заменяет только разметку внутри уже существующего окна."""
         if self.window is None:
             return
         if self.view is not None:
-            self.view.destroy()
-        view_class = widget_view_class(widget_type)
-        self.view = view_class(self.window, self.timer, self.actions)
-        self.view.apply_overrun_visual(self._overrun_frame)
+            self.view.hide()
+            self.view.deleteLater()
+        self.view = widget_view_class(widget_type)(self.window, self.timer, self.actions, self.theme_manager)
+        layout = self.window.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.window)
+            layout.setContentsMargins(0, 0, 0, 0)
+        else:
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget() is not None and item.widget() is not self.view:
+                    item.widget().deleteLater()
+        layout.addWidget(self.view)
         self._active_view_type = normalize_widget_type(widget_type)
-        self._content_expanded = False
-        for widget in self.view.drag_widgets:
-            widget.bind("<ButtonPress-1>", self._start_drag)
-            widget.bind("<B1-Motion>", self._drag)
-            widget.bind("<ButtonRelease-1>", self._finish_drag)
+        self.view.apply_overrun_visual(self._overrun_frame)
 
-    def _set_geometry(self, width: int, height: int, x: int, y: int) -> None:
-        """Применяет сохраненную геометрию, не помечая ее как ручную."""
-        if self.window is None:
+    def _enable_geometry_capture(self) -> None:
+        self._accept_geometry = True
+        self._programmatic_size = None
+
+    def _on_geometry_changed(self) -> None:
+        if not self._accept_geometry or self.window is None:
             return
-        self._accept_user_configure = False
-        self._programmatic_size = (width, height)
-        self._last_size = (width, height)
-        self.window.geometry(f"{width}x{height}{x:+d}{y:+d}")
-        if self._enable_configure_after_id is not None:
-            self.window.after_cancel(self._enable_configure_after_id)
-        self._enable_configure_after_id = self.window.after(
-            250,
-            self._enable_user_configure,
-        )
-
-    def _enable_user_configure(self) -> None:
-        self._enable_configure_after_id = None
-        self._accept_user_configure = True
-
-    def _on_configure(self, event: tk.Event) -> None:
-        """Перестраивает шрифты и отложенно сохраняет ручную геометрию."""
-        if self.window is None or event.widget is not self.window:
-            return
-        width = max(1, int(event.width))
-        height = max(1, int(event.height))
-        size_changed = self._last_size is not None and self._last_size != (width, height)
-        self._last_size = (width, height)
-
-        if self._accept_user_configure and size_changed:
-            self.settings.widget_size = WIDGET_SIZE_CUSTOM
-            layout = self.settings.widget_layouts[self.settings.widget_type]
-            layout["size"] = WIDGET_SIZE_CUSTOM
-            self._programmatic_size = None
-            self._content_expanded = False
-
-        current_size = (
-            WIDGET_SIZE_CUSTOM
-            if self.settings.widget_size == WIDGET_SIZE_CUSTOM
-            else self.settings.widget_size
-        )
-        self._apply_view_style(width, height, current_size)
-        if self._accept_user_configure:
-            self._schedule_layout_save()
-
-    def _apply_view_style(self, width: int, height: int, widget_size: str) -> None:
-        if self.view is None:
-            return
-        parameters = widget_size_parameters(
-            self.settings.widget_type,
-            widget_size,
-            width,
-            height,
-        )
-        self.view.apply_style(self._palette(), parameters)
-
-    def _palette(self) -> ThemePalette:
-        """Возвращает текущую общую палитру с безопасным fallback."""
-        if self.theme_manager is not None:
-            return self.theme_manager.palette
-        from app.theme import get_palette
-
-        return get_palette(
-            self.settings.theme_name,
-            self.settings.appearance_mode,
-            self.settings.custom_theme,
-        )
-
-    def _fit_window_to_content(self) -> None:
-        """Не дает DPI и длинным названиям обрезать элементы, не меняя пресет."""
-        if self.window is None or self.view is None:
-            return
-        overrun_frame = getattr(self, "_overrun_frame", INACTIVE_FRAME)
-        if overrun_frame.active and overrun_frame.digit_scale > 1.0:
-            # Пресеты оставляют запас для +15%; во время анимации окно не меняется.
-            return
-        frame = getattr(self.view, "frame", None)
-        if frame is None:
-            return
-        frame.update_idletasks()
         layout = self.settings.widget_layouts[self.settings.widget_type]
-        target_width = int(layout["width"])
-        target_height = int(layout["height"])
-        required_width = frame.winfo_reqwidth()
-        required_height = frame.winfo_reqheight()
-        minimum_width, minimum_height = WIDGET_MIN_SIZES[self.settings.widget_type]
-        fitted_width, fitted_height = content_fitted_dimensions(
-            target_width,
-            target_height,
-            required_width,
-            required_height,
-            minimum_width,
-            minimum_height,
-        )
-        self.window.minsize(
-            max(minimum_width, required_width),
-            max(minimum_height, required_height),
-        )
+        size_changed = (self.window.width(), self.window.height()) != (int(layout["width"]), int(layout["height"]))
+        if size_changed:
+            self.settings.widget_size = WIDGET_SIZE_CUSTOM
+            layout["size"] = WIDGET_SIZE_CUSTOM
+            self._apply_view_style(self.window.width(), self.window.height(), WIDGET_SIZE_CUSTOM)
+        if self._geometry_debouncer is not None:
+            self._geometry_debouncer.trigger()
 
-        current_width = max(1, self.window.winfo_width())
-        current_height = max(1, self.window.winfo_height())
-        if (current_width, current_height) == (fitted_width, fitted_height):
-            self._content_expanded = (
-                fitted_width != target_width or fitted_height != target_height
-            )
-            return
-        must_expand = current_width < fitted_width or current_height < fitted_height
-        if not must_expand and not self._content_expanded:
-            return
-
-        x, y = clamp_window_position(
-            int(layout["x"]),
-            int(layout["y"]),
-            fitted_width,
-            fitted_height,
-            self._screen_bounds(),
-        )
-        self._set_geometry(fitted_width, fitted_height, x, y)
-        self._content_expanded = (
-            fitted_width != target_width or fitted_height != target_height
-        )
-
-    def _schedule_layout_save(self) -> None:
-        """Не пишет JSON на каждом пикселе перемещения или resize."""
-        if self.window is None:
-            return
-        if self._save_after_id is not None:
-            self.window.after_cancel(self._save_after_id)
-        self._save_after_id = self.window.after(
-            self.SAVE_DELAY_MS,
-            self._persist_current_layout,
-        )
+    def _apply_view_style(self, width: int, height: int, size: str) -> None:
+        if self.view is not None:
+            self.view.apply_style(self.theme_manager.palette, widget_size_parameters(self.settings.widget_type, size, width, height))
 
     def _capture_current_layout(self) -> dict[str, int | str] | None:
-        """Снимает геометрию окна без записи на диск."""
         if self.window is None or self._active_view_type is None:
             return None
-        try:
-            width = max(1, self.window.winfo_width())
-            height = max(1, self.window.winfo_height())
-            x = self.window.winfo_x()
-            y = self.window.winfo_y()
-        except tk.TclError:
-            return None
+        point = self.window.pos()
         layout = self.settings.widget_layouts[self._active_view_type]
-        layout.update(
-            {
-                "size": self.settings.widget_size,
-                "width": width,
-                "height": height,
-                "x": x,
-                "y": y,
-            },
-        )
-        self.settings.widget_x = x
-        self.settings.widget_y = y
+        layout.update({
+            "size": str(layout["size"]),
+            "width": self.window.width(), "height": self.window.height(),
+            "x": point.x(), "y": point.y(),
+        })
+        self.settings.widget_x, self.settings.widget_y = point.x(), point.y()
         return deepcopy(layout)
 
     def _persist_current_layout(self) -> None:
-        """Сохраняет один итог движения/resize и уведомляет форму настроек."""
-        self._save_after_id = None
-        layout = self._capture_current_layout()
-        if layout is None:
+        if self._capture_current_layout() is None:
             return
         self._save_settings(self.settings)
         if self._on_layout_changed is not None:
             self._on_layout_changed(self.settings)
 
-    def _screen_bounds(self) -> tuple[int, int, int, int]:
-        """Возвращает доступную виртуальную область, известную Tk."""
-        if self.window is None:
+    @staticmethod
+    def _screen_bounds() -> tuple[int, int, int, int]:
+        screens = QApplication.screens()
+        if not screens:
             return (0, 0, 1, 1)
-        try:
-            x = self.window.winfo_vrootx()
-            y = self.window.winfo_vrooty()
-            width = self.window.winfo_vrootwidth()
-            height = self.window.winfo_vrootheight()
-            if width <= 1 or height <= 1:
-                width = self.window.winfo_screenwidth()
-                height = self.window.winfo_screenheight()
-            return (x, y, width, height)
-        except tk.TclError:
-            return (0, 0, 1, 1)
-
-    def _start_drag(self, event: tk.Event) -> None:
-        """Запоминает точку начала перемещения за свободную область."""
-        if self.window is None:
-            return
-        self._drag_offset_x = event.x_root - self.window.winfo_x()
-        self._drag_offset_y = event.y_root - self.window.winfo_y()
-
-    def _drag(self, event: tk.Event) -> None:
-        """Перемещает окно без записи настроек на каждом событии мыши."""
-        if self.window is None:
-            return
-        x = event.x_root - self._drag_offset_x
-        y = event.y_root - self._drag_offset_y
-        self.window.geometry(f"{x:+d}{y:+d}")
-
-    def _finish_drag(self, _event: tk.Event) -> None:
-        """Сохраняет только итоговую позицию после отпускания мыши."""
-        self._persist_current_layout()
+        united = screens[0].availableGeometry()
+        for screen in screens[1:]:
+            united = united.united(screen.availableGeometry())
+        return united.x(), united.y(), united.width(), united.height()

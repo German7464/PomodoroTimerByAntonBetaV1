@@ -1,18 +1,29 @@
-"""Главное окно приложения Pomodoro Timer на Tkinter."""
+"""Главное окно Pomodoro Timer на Qt Widgets."""
 
-from collections.abc import Callable
-import tkinter as tk
-from tkinter import messagebox, ttk
+from __future__ import annotations
+
+from copy import deepcopy
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.autostart import AutostartService
 from app.config import APP_NAME, DATA_DIR_WARNING, SETTINGS_FILE, STATISTICS_FILE
-from app.models import AppSettings, TimerMode, TimeDisplayFormat
+from app.models import AppSettings, TimerMode
 from app.notifications import NotificationService
-from app.overrun_effects import (
-    OverrunVisualController,
-    OverrunVisualFrame,
-    normalize_overrun_visual,
-)
+from app.overrun_effects import OverrunVisualController, OverrunVisualFrame, normalize_overrun_visual
 from app.statistics import StatisticsService
 from app.storage import load_app_settings, save_app_settings
 from app.theme import (
@@ -20,53 +31,57 @@ from app.theme import (
     APPEARANCE_LIGHT,
     CUSTOM_THEME_NAME,
     ThemeManager,
-    normalize_custom_theme,
     normalize_appearance_mode,
+    normalize_custom_theme,
     normalize_theme_name,
 )
 from app.timer_engine import TimerEngine
+from app.ui.components import AppButton, Card, PageHeader, SwitchRow
+from app.ui.design_system import TOKENS
 from app.ui.help_window import HelpView
-from app.ui.overrun_surface import draw_beacon, draw_wave
+from app.ui.qt_app import Debouncer, QtScheduler, ensure_application
 from app.ui.settings_window import SettingsView
 from app.ui.stats_view import StatsView
-from app.ui.toggle_switch import ToggleSwitch
+from app.ui.timer_visual import TimerVisual
 from app.ui.tray import TrayController
 from app.ui.widget_window import WidgetActions, WidgetWindow
 from app.widget_settings import normalize_widget_opacity
 
 
-class MainWindow:
-    """Главное окно с таймером, статистикой, настройками, справкой и треем."""
+class MainWindow(QMainWindow):
+    """Профессиональная Qt-оболочка над единым состоянием приложения."""
 
     def __init__(self) -> None:
-        """Создает интерфейс и общую логику приложения."""
-        self.root = tk.Tk()
-        self.root.title(APP_NAME)
-        self.root.resizable(False, False)
-        self._settings_save_after_id: str | None = None
+        self.application = ensure_application()
+        super().__init__()
+        self.root = self  # Совместимый атрибут для внешних диагностик.
+        self.setObjectName("MainWindow")
+        self.setWindowTitle(APP_NAME)
+        self.resize(1120, 760)
+        self.setMinimumSize(900, 620)
+        self._exiting = False
 
         self.settings = load_app_settings(SETTINGS_FILE)
-        self.widget_enabled_var = tk.BooleanVar(value=self.settings.widget_enabled)
-        self.appearance_dark_var = tk.BooleanVar(
-            value=self.settings.appearance_mode == APPEARANCE_DARK,
-        )
-        self.theme_manager = ThemeManager(self.root)
+        self.theme_manager = ThemeManager(self)
         self.theme_manager.apply(
             self.settings.theme_name,
             self.settings.appearance_mode,
             self.settings.custom_theme,
         )
         self.autostart = AutostartService()
-
         self.timer = TimerEngine(self.settings)
         self.statistics = StatisticsService(STATISTICS_FILE)
-        self.notifications = NotificationService(
-            self.root,
-            self.settings,
-            self.theme_manager,
-        )
+
+        self._scheduler = QtScheduler(self)
+        self._settings_save = Debouncer(self, 500, self._save_settings_now)
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(1000)
+        self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._tick_timer.timeout.connect(self._tick_once)
+
+        self.notifications = NotificationService(self, self.settings, self.theme_manager)
         self.widget_window = WidgetWindow(
-            self.root,
+            self,
             self.timer,
             self.settings,
             actions=WidgetActions(
@@ -82,31 +97,80 @@ class MainWindow:
             theme_manager=self.theme_manager,
         )
         self.overrun_visual_controller = OverrunVisualController(
-            self.root.after,
-            self.root.after_cancel,
+            self._scheduler.schedule,
+            self._scheduler.cancel,
             self._apply_overrun_visual_frame,
         )
-
         self.tray = TrayController(
-            show_window=self._schedule(self.show_window),
-            hide_window=self._schedule(self.hide_to_tray),
-            toggle_timer=self._schedule(self.toggle_timer_from_tray),
-            reset_timer=self._schedule(self.reset),
-            exit_app=self._schedule(self.exit_app),
+            show_window=self.show_window,
+            hide_window=self.hide_to_tray,
+            toggle_timer=self.toggle_timer_from_tray,
+            reset_timer=self.reset,
+            exit_app=self.exit_app,
         )
-        self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+        self._build_ui()
+        self.set_widget_visibility(self.settings.widget_enabled, persist=False)
+        self.apply_theme_selection(
+            self.settings.theme_name,
+            self.settings.appearance_mode,
+            persist=False,
+        )
+        self._refresh_labels()
+        if DATA_DIR_WARNING:
+            QTimer.singleShot(350, lambda: QMessageBox.warning(self, "Portable-режим", DATA_DIR_WARNING))
 
-        timer_tab = ttk.Frame(notebook, padding=24)
-        notebook.add(timer_tab, text="Таймер")
+    def _build_ui(self) -> None:
+        root = QWidget(self)
+        root.setObjectName("AppRoot")
+        self.setCentralWidget(root)
+        layout = QHBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        self.stats_view = StatsView(notebook, self.statistics)
-        notebook.add(self.stats_view, text="Статистика")
+        sidebar = QFrame(root)
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(220)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(TOKENS.spacing.md, TOKENS.spacing.xl, TOKENS.spacing.md, TOKENS.spacing.lg)
+        side.setSpacing(TOKENS.spacing.xs)
+        brand = QLabel("Pomodoro", sidebar)
+        brand.setProperty("role", "pageTitle")
+        side.addWidget(brand)
+        subtitle = QLabel("Спокойный ритм работы", sidebar)
+        subtitle.setProperty("role", "caption")
+        side.addWidget(subtitle)
+        side.addSpacing(TOKENS.spacing.xl)
 
+        self.page_stack = QStackedWidget(root)
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        nav_specs = (
+            ("Таймер", "timer"),
+            ("Статистика", "statistics"),
+            ("Настройки", "settings"),
+            ("Справка", "help"),
+        )
+        self.nav_buttons: list[AppButton] = []
+        for index, (text, icon) in enumerate(nav_specs):
+            button = AppButton(text, sidebar, variant="ghost", icon_name=icon, theme_manager=self.theme_manager)
+            button.setProperty("nav", True)
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, target=index: self.page_stack.setCurrentIndex(target))
+            self.nav_group.addButton(button, index)
+            self.nav_buttons.append(button)
+            side.addWidget(button)
+        side.addStretch(1)
+        version = QLabel("Qt 6 · Windows", sidebar)
+        version.setProperty("role", "caption")
+        side.addWidget(version)
+        layout.addWidget(sidebar)
+
+        self.page_stack.addWidget(self._build_timer_page())
+        self.stats_view = StatsView(self.page_stack, self.statistics, self.theme_manager)
+        self.page_stack.addWidget(self.stats_view)
         self.settings_view = SettingsView(
-            notebook,
+            self.page_stack,
             self.settings,
             self.apply_settings,
             self.autostart.status(),
@@ -117,228 +181,128 @@ class MainWindow:
             on_overrun_preview=self.preview_overrun_visual,
             on_widget_opacity_change=self.set_widget_opacity,
             on_overrun_opacity_change=self.set_overrun_widget_opacity,
+            on_widget_configuration_change=self.set_widget_configuration,
             theme_manager=self.theme_manager,
         )
-        notebook.add(self.settings_view, text="Настройки")
+        self.page_stack.addWidget(self.settings_view)
+        self.help_view = HelpView(self.page_stack)
+        self.page_stack.addWidget(self.help_view)
+        layout.addWidget(self.page_stack, 1)
+        self.nav_buttons[0].setChecked(True)
 
-        self.help_view = HelpView(notebook)
-        notebook.add(self.help_view, text="Справка")
-
-        toolbar = ttk.Frame(timer_tab, style="Toolbar.TFrame")
-        toolbar.pack(fill=tk.X, pady=(0, 16))
-        ttk.Label(toolbar, text="Фокус-сессия", style="Heading.TLabel").pack(side=tk.LEFT)
-        self.appearance_mode_switch = ToggleSwitch(
-            toolbar,
-            text="Тёмный режим",
-            variable=self.appearance_dark_var,
-            command=self.set_dark_appearance,
+    def _build_timer_page(self) -> QWidget:
+        page = QWidget(self)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(TOKENS.spacing.xxl, TOKENS.spacing.xl, TOKENS.spacing.xxl, TOKENS.spacing.xl)
+        outer.setSpacing(TOKENS.spacing.lg)
+        header = PageHeader("Фокус-сессия", "Один таймер для главного окна, уведомления и виджета.", page)
+        self.appearance_mode_switch = SwitchRow(
+            "Тёмный режим",
+            self.settings.appearance_mode == APPEARANCE_DARK,
+            page,
             theme_manager=self.theme_manager,
-            animations_enabled=lambda: bool(
-                self.settings.overrun_visual.get("animations_enabled", True)
-            ),
+            animations_enabled=lambda: bool(self.settings.overrun_visual.get("animations_enabled", True)),
         )
-        self.appearance_mode_switch.pack(side=tk.RIGHT)
+        self.appearance_mode_switch.setFixedWidth(280)
+        self.appearance_mode_switch.valueChanged.connect(self.set_dark_appearance)
+        header.actions.addWidget(self.appearance_mode_switch)
+        outer.addWidget(header)
 
-        palette = self.theme_manager.palette
-        self.timer_border = tk.Frame(
-            timer_tab,
-            borderwidth=0,
-            highlightthickness=3,
-            highlightbackground=palette.card_background,
-            bg=palette.card_background,
-        )
-        self.timer_border.pack(fill=tk.BOTH, expand=True)
-        self.timer_card = ttk.Frame(
-            self.timer_border,
-            style="TimerCard.TFrame",
-            padding=(34, 28),
-        )
-        self.timer_card.pack(fill=tk.BOTH, expand=True)
+        timer_card = Card(page, padding=TOKENS.spacing.lg, shadow=True, theme_manager=self.theme_manager)
+        self.timer_visual = TimerVisual(self.theme_manager, timer_card, base_font_size=72, mode_font_size=17)
+        timer_card.content_layout.addWidget(self.timer_visual, 1)
+        self.status_label = QLabel("Таймер остановлен", timer_card)
+        self.status_label.setProperty("role", "statusChip")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setAccessibleName("Состояние таймера")
+        timer_card.content_layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignCenter)
 
-        self.mode_label = ttk.Label(
-            self.timer_card,
-            text=self.timer.mode_name(),
-            style=self.theme_manager.mode_style(
-                self.timer.state.mode,
-                self.timer.state.waiting_for_continue,
-            ),
-        )
-        self.mode_label.pack(pady=(0, 8))
-
-        self.timer_display = tk.Frame(
-            self.timer_card,
-            borderwidth=0,
-            highlightthickness=0,
-            bg=palette.card_background,
-        )
-        self.timer_display.pack(pady=(6, 10))
-        self.timer_display.columnconfigure(1, weight=1)
-        self.main_left_beacon = tk.Canvas(
-            self.timer_display,
-            width=20,
-            height=20,
-            borderwidth=0,
-            highlightthickness=0,
-            bg=palette.card_background,
-        )
-        self.main_left_beacon.grid(row=0, column=0, padx=(0, 8))
-        self.time_label = ttk.Label(
-            self.timer_display,
-            text=self.timer.formatted_time(),
-            style="TimerCard.Timer.TLabel",
-        )
-        self.time_label.grid(row=0, column=1)
-        self.main_right_beacon = tk.Canvas(
-            self.timer_display,
-            width=20,
-            height=20,
-            borderwidth=0,
-            highlightthickness=0,
-            bg=palette.card_background,
-        )
-        self.main_right_beacon.grid(row=0, column=2, padx=(8, 0))
-        self.main_wave_canvas = tk.Canvas(
-            self.timer_display,
-            height=10,
-            width=240,
-            borderwidth=0,
-            highlightthickness=0,
-            bg=palette.card_background,
-        )
-        self.main_wave_canvas.grid(row=1, column=1, sticky=tk.EW, pady=(2, 0))
-
-        self.status_label = ttk.Label(
-            self.timer_card,
-            text="Таймер остановлен",
-            style="TimerCard.Secondary.TLabel",
-        )
-        self.status_label.pack(pady=(0, 22))
-
-        controls = ttk.Frame(self.timer_card, style="TimerCard.TFrame")
-        controls.pack()
-
-        self.start_button = ttk.Button(
-            controls,
-            text="Старт",
-            command=self.start,
-            style="Accent.TButton",
-        )
-        self.start_button.grid(row=0, column=0, padx=5)
-
-        self.pause_button = ttk.Button(
-            controls,
-            text="Пауза",
-            command=self.toggle_pause,
-            state=tk.DISABLED,
-        )
-        self.pause_button.grid(row=0, column=1, padx=5)
-
-        self.skip_button = ttk.Button(
-            controls,
-            text="Пропустить период",
-            command=self.skip_period,
-        )
-        self.skip_button.grid(
-            row=0,
-            column=2,
-            padx=5,
-        )
-        self.reset_button = ttk.Button(controls, text="Сброс", command=self.reset)
-        self.reset_button.grid(row=0, column=3, padx=5)
-
-        self.continue_button = ttk.Button(
-            controls,
-            text="Продолжить и начать следующий период",
-            command=self.continue_manual_transition,
-            state=tk.DISABLED,
-            style="Accent.TButton",
-        )
-        self.continue_button.grid(row=1, column=0, columnspan=4, pady=(12, 0))
-
-        self.widget_visibility_switch = ToggleSwitch(
-            controls,
-            text="Отображать виджет",
-            variable=self.widget_enabled_var,
-            command=self.set_widget_visibility,
+        controls = QHBoxLayout()
+        controls.setSpacing(TOKENS.spacing.sm)
+        controls.addStretch(1)
+        self.start_button = AppButton("Старт", timer_card, variant="primary", icon_name="play", theme_manager=self.theme_manager)
+        self.start_button.clicked.connect(self.start)
+        self.pause_button = AppButton("Пауза", timer_card, icon_name="pause", theme_manager=self.theme_manager)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.skip_button = AppButton("Пропустить", timer_card, variant="ghost", icon_name="skip", theme_manager=self.theme_manager)
+        self.skip_button.clicked.connect(self.skip_period)
+        self.reset_button = AppButton("Сбросить", timer_card, variant="ghost", icon_name="reset", theme_manager=self.theme_manager)
+        self.reset_button.clicked.connect(self.reset)
+        for button in (self.start_button, self.pause_button, self.skip_button, self.reset_button):
+            controls.addWidget(button)
+        controls.addStretch(1)
+        timer_card.content_layout.addLayout(controls)
+        self.continue_button = AppButton(
+            "Продолжить и начать следующий период",
+            timer_card,
+            variant="primary",
+            icon_name="play",
             theme_manager=self.theme_manager,
-            animations_enabled=lambda: bool(
-                self.settings.overrun_visual.get("animations_enabled", True)
-            ),
-            surface="card_background",
         )
-        self.widget_visibility_switch.grid(
-            row=2,
-            column=0,
-            columnspan=4,
-            sticky=tk.EW,
-            pady=(12, 0),
-        )
+        self.continue_button.clicked.connect(self.continue_manual_transition)
+        timer_card.content_layout.addWidget(self.continue_button, 0, Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(timer_card, 1)
 
-        self._sync_appearance_switch()
-        self.set_widget_visibility(self.settings.widget_enabled, persist=False)
-        self.apply_theme_selection(
-            self.settings.theme_name,
-            self.settings.appearance_mode,
-            persist=False,
+        widget_card = Card(page, padding=TOKENS.spacing.md)
+        self.widget_visibility_switch = SwitchRow(
+            "Отображать виджет",
+            self.settings.widget_enabled,
+            widget_card,
+            description="Положение, размер, тип и прозрачность сохраняются отдельно.",
+            theme_manager=self.theme_manager,
+            animations_enabled=lambda: bool(self.settings.overrun_visual.get("animations_enabled", True)),
         )
-
-        if DATA_DIR_WARNING:
-            self.root.after(300, lambda: messagebox.showwarning("Portable-режим", DATA_DIR_WARNING))
+        self.widget_visibility_switch.valueChanged.connect(self.set_widget_visibility)
+        widget_card.content_layout.addWidget(self.widget_visibility_switch)
+        outer.addWidget(widget_card)
+        return page
 
     def run(self) -> None:
-        """Запускает трей и цикл обработки событий Tkinter."""
+        """Запускает Qt event loop; все GUI-объекты уже принадлежат одному потоку."""
         self.tray.start()
-        self._schedule_tick()
+        self._tick_timer.start()
         if self.settings.minimize_to_tray_on_start:
-            self.root.after(200, self.hide_to_tray)
-        self.root.mainloop()
+            self.hide()
+        else:
+            self.show()
+        self.application.exec()
 
     def start(self) -> None:
-        """Запускает отсчет времени."""
-        if not self.timer.start():
-            self._refresh_labels()
-            return
-        self.start_button.config(state=tk.DISABLED)
-        self.pause_button.config(state=tk.NORMAL, text="Пауза")
+        self.timer.start()
         self._refresh_labels()
 
     def toggle_pause(self) -> None:
-        """Ставит таймер на паузу или продолжает отсчет."""
-        if not self.timer.toggle_pause():
-            self._refresh_labels()
-            return
-        self._sync_timer_buttons()
+        self.timer.toggle_pause()
         self._refresh_labels()
 
     def skip_period(self) -> None:
-        """Пропускает текущий период Pomodoro."""
-        controller = getattr(self, "overrun_visual_controller", None)
-        if controller is not None:
-            controller.stop_preview()
+        self.overrun_visual_controller.stop_preview()
         skipped_mode = self.timer.skip_period()
-        if skipped_mode is None:
-            self._refresh_labels()
-            return
-        self.statistics.record_skipped_period(skipped_mode)
-        self.stats_view.refresh()
+        if skipped_mode is not None:
+            self.statistics.record_skipped_period(skipped_mode)
+            self.stats_view.refresh()
+        self._refresh_labels()
+
+    def reset(self) -> None:
+        self.overrun_visual_controller.stop_preview()
+        if self.timer.reset():
+            self.statistics.record_reset()
+            self.stats_view.refresh()
         self._refresh_labels()
 
     def apply_settings(self, settings: AppSettings, autostart_changed: bool = False) -> None:
-        """Сохраняет настройки и применяет их к текущему таймеру."""
         should_reset_timer = self._duration_settings_changed(settings)
         if autostart_changed:
-            # Autostart changes HKCU Run, so it must happen only after an explicit user toggle.
             try:
                 self.autostart.set_enabled(settings.autostart_enabled)
             except RuntimeError as error:
-                messagebox.showwarning("Автозапуск", str(error))
+                QMessageBox.warning(self, "Автозапуск", str(error))
                 settings.autostart_enabled = self.settings.autostart_enabled
-                self.settings_view.autostart_enabled_var.set(settings.autostart_enabled)
-
-        self._cancel_deferred_settings_save()
-        self.settings_view.update_autostart_status(self.autostart.status())
+        self._settings_save.cancel()
         settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.settings = settings
+        self.settings_view.settings = settings
+        self.settings_view.update_autostart_status(self.autostart.status())
         self.apply_theme_selection(
             settings.theme_name,
             settings.appearance_mode,
@@ -351,74 +315,70 @@ class MainWindow:
         save_app_settings(SETTINGS_FILE, settings)
         if should_reset_timer and not self.timer.state.waiting_for_continue:
             self.timer.reset()
-            self.start_button.config(state=tk.NORMAL)
-            self.pause_button.config(state=tk.DISABLED, text="Пауза")
-        self._refresh_labels()
-
-    def reset(self) -> None:
-        """Сбрасывает таймер и обновляет подписи в окне."""
-        controller = getattr(self, "overrun_visual_controller", None)
-        if controller is not None:
-            controller.stop_preview()
-        if not self.timer.reset():
-            self._refresh_labels()
-            return
-        self.statistics.record_reset()
-        self.stats_view.refresh()
-        self.start_button.config(state=tk.NORMAL)
-        self.pause_button.config(state=tk.DISABLED, text="Пауза")
         self._refresh_labels()
 
     def show_window(self) -> None:
-        """Показывает главное окно из трея."""
         self._sync_widget_visibility()
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def hide_to_tray(self) -> None:
-        """Скрывает главное окно, оставляя таймер, виджет и трей работать."""
-        self.root.withdraw()
+        self.hide()
 
     def on_window_close(self) -> None:
-        """Обрабатывает закрытие окна согласно настройке пользователя."""
         if self.settings.close_to_tray:
             self.hide_to_tray()
         else:
             self.exit_app()
 
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._exiting:
+            event.accept()
+            return
+        if self.settings.close_to_tray:
+            event.ignore()
+            self.hide_to_tray()
+            return
+        event.ignore()
+        self.exit_app()
+
     def exit_app(self) -> None:
-        """Полностью завершает приложение и убирает иконку трея."""
-        self._flush_deferred_settings_save()
+        self._shutdown(quit_application=True)
+
+    def _shutdown(self, *, quit_application: bool) -> None:
+        """Единообразно освобождает GUI; тесты могут не завершать общий QApplication."""
+        if self._exiting:
+            return
+        self._exiting = True
+        self._settings_save.flush()
         overrun = self.timer.finalize_overrun_on_exit()
         if overrun is not None:
             self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
+        self._tick_timer.stop()
         self.notifications.dismiss()
-        controller = getattr(self, "overrun_visual_controller", None)
-        if controller is not None:
-            controller.stop()
-        self.tray.stop()
-        self.root.destroy()
+        self.overrun_visual_controller.stop()
+        self._scheduler.stop_all()
+        self.widget_window.close()
+        self.tray.dispose()
+        self.close()
+        if quit_application:
+            self.application.quit()
 
     def toggle_timer_from_tray(self) -> None:
-        """Запускает или ставит таймер на паузу из меню трея."""
         if self.timer.state.waiting_for_continue:
-            # Во время превышения команда трея не должна незаметно остановить
-            # подсчет. Главное окно содержит явную кнопку продолжения.
             self.show_window()
-            self._refresh_labels()
-            return
-        if self.timer.state.is_running:
+        elif self.timer.state.is_running:
             self.timer.pause()
         else:
             self.timer.start()
-        self._sync_timer_buttons()
         self._refresh_labels()
 
     def set_dark_appearance(self, enabled: bool) -> None:
-        """Выбирает светлый или тёмный режим через общий переключатель."""
-        appearance_mode = APPEARANCE_DARK if enabled else APPEARANCE_LIGHT
-        self.apply_theme_selection(self.settings.theme_name, appearance_mode)
+        self.apply_theme_selection(
+            self.settings.theme_name,
+            APPEARANCE_DARK if enabled else APPEARANCE_LIGHT,
+        )
 
     def apply_theme_selection(
         self,
@@ -428,7 +388,6 @@ class MainWindow:
         custom_theme: object = None,
         persist: bool = True,
     ) -> bool:
-        """Применяет тему ко всем открытым окнам и сохраняет только реальный выбор."""
         normalized_theme = normalize_theme_name(theme_name)
         normalized_mode = normalize_appearance_mode(appearance_mode)
         normalized_custom = normalize_custom_theme(
@@ -446,200 +405,124 @@ class MainWindow:
         if hasattr(self, "settings_view"):
             self.settings_view.sync_theme(normalized_theme, normalized_mode)
         self._sync_appearance_switch()
-        if hasattr(self, "mode_label"):
-            self.mode_label.config(
-                style=self.theme_manager.mode_style(
-                    self.timer.state.mode,
-                    self.timer.state.waiting_for_continue,
-                ),
-            )
-        if hasattr(self, "overrun_visual_controller"):
-            self._sync_overrun_visual()
+        self._sync_overrun_visual()
         if changed and persist:
             save_app_settings(SETTINGS_FILE, self.settings)
         return changed
 
-    def preview_custom_theme(
-        self,
-        custom_theme: dict[str, dict[str, str]],
-        appearance_mode: str,
-    ) -> None:
-        """Временно оформляет все окна черновиком без изменения настроек и JSON."""
-        normalized_mode = normalize_appearance_mode(appearance_mode)
-        self.theme_manager.apply(CUSTOM_THEME_NAME, normalized_mode, custom_theme)
-        if hasattr(self, "mode_label"):
-            self.mode_label.config(
-                style=self.theme_manager.mode_style(
-                    self.timer.state.mode,
-                    self.timer.state.waiting_for_continue,
-                ),
-            )
+    def preview_custom_theme(self, custom_theme: dict[str, dict[str, str]], appearance_mode: str) -> None:
+        self.theme_manager.apply(CUSTOM_THEME_NAME, normalize_appearance_mode(appearance_mode), custom_theme)
         self._sync_overrun_visual()
 
-    def apply_custom_theme(
-        self,
-        custom_theme: dict[str, dict[str, str]],
-        appearance_mode: str,
-    ) -> None:
-        """Сохраняет подтверждённую пользовательскую копию одним действием."""
-        self.apply_theme_selection(
-            CUSTOM_THEME_NAME,
-            appearance_mode,
-            custom_theme=custom_theme,
-        )
+    def apply_custom_theme(self, custom_theme: dict[str, dict[str, str]], appearance_mode: str) -> None:
+        self.apply_theme_selection(CUSTOM_THEME_NAME, appearance_mode, custom_theme=custom_theme)
 
     def cancel_theme_preview(self) -> None:
-        """Возвращает сохранённое оформление после отмены редактора."""
         self.theme_manager.apply(
             self.settings.theme_name,
             self.settings.appearance_mode,
             self.settings.custom_theme,
         )
-        if hasattr(self, "mode_label"):
-            self.mode_label.config(
-                style=self.theme_manager.mode_style(
-                    self.timer.state.mode,
-                    self.timer.state.waiting_for_continue,
-                ),
-            )
         self._sync_overrun_visual()
 
-    def preview_overrun_visual(
-        self,
-        mode: TimerMode,
-        visual: dict[str, object],
-    ) -> None:
-        """Запускает краткий визуальный пример без команд TimerEngine."""
-        self.overrun_visual_controller.start_preview(
-            mode,
-            visual,
-            self.theme_manager.palette,
-        )
+    def preview_overrun_visual(self, mode: TimerMode, visual: dict[str, object]) -> None:
+        self.overrun_visual_controller.start_preview(mode, visual, self.theme_manager.palette)
 
     def set_widget_opacity(self, opacity: int) -> None:
-        """Сразу меняет alpha и сохраняет итог ползунка с задержкой."""
         self.settings.widget_opacity = normalize_widget_opacity(opacity)
         self.widget_window.apply_opacity()
         if hasattr(self, "settings_view"):
             self.settings_view.sync_widget_opacity(self.settings.widget_opacity)
-        self._schedule_settings_save()
+        self._settings_save.trigger()
 
     def set_overrun_widget_opacity(self, enabled: bool) -> None:
-        """Сразу включает временные 1.0, не меняя постоянное значение alpha."""
-        normalized_enabled = bool(enabled)
-        current_enabled = bool(
-            self.settings.overrun_visual.get("opaque_widget_during_overrun", False)
-        )
-        if hasattr(self, "settings_view"):
-            self.settings_view.sync_overrun_widget_opacity(normalized_enabled)
-        if current_enabled == normalized_enabled:
-            return
+        normalized = bool(enabled)
         visual = dict(self.settings.overrun_visual)
-        visual["opaque_widget_during_overrun"] = normalized_enabled
+        if bool(visual.get("opaque_widget_during_overrun", False)) == normalized:
+            return
+        visual["opaque_widget_during_overrun"] = normalized
         self.settings.overrun_visual = normalize_overrun_visual(visual)
         self.widget_window.apply_opacity()
-        self._schedule_settings_save()
+        if hasattr(self, "settings_view"):
+            self.settings_view.sync_overrun_widget_opacity(normalized)
+        self._settings_save.trigger()
 
-    def _schedule_settings_save(self) -> None:
-        """Объединяет поток изменений ползунка в одну запись JSON."""
-        self._cancel_deferred_settings_save()
-        self._settings_save_after_id = self.root.after(
-            500,
-            self._flush_deferred_settings_save,
-        )
+    def set_widget_configuration(
+        self,
+        widget_type: str,
+        widget_size: str,
+        widget_layouts: dict,
+        always_on_top: bool,
+    ) -> None:
+        """Применяет вид/размер/позицию немедленно без изменения TimerEngine."""
+        self.settings.widget_type = widget_type
+        self.settings.widget_size = widget_size
+        self.settings.widget_layouts = deepcopy(widget_layouts)
+        self.settings.widget_always_on_top = bool(always_on_top)
+        self.widget_window.apply_settings(self.settings)
+        self._settings_save.trigger()
 
-    def _cancel_deferred_settings_save(self) -> None:
-        after_id = getattr(self, "_settings_save_after_id", None)
-        self._settings_save_after_id = None
-        if after_id is None:
-            return
-        try:
-            self.root.after_cancel(after_id)
-        except tk.TclError:
-            pass
-
-    def _flush_deferred_settings_save(self) -> None:
-        """Сохраняет постоянные настройки; временный alpha в модель не входит."""
-        if getattr(self, "_settings_save_after_id", None) is None:
-            return
-        self._cancel_deferred_settings_save()
+    def _save_settings_now(self) -> None:
         save_app_settings(SETTINGS_FILE, self.settings)
 
     def _sync_appearance_switch(self) -> None:
-        """Синхронизирует переключатель с общим строковым режимом темы."""
-        if not hasattr(self, "appearance_mode_switch"):
-            return
-        dark_is_active = self.settings.appearance_mode == APPEARANCE_DARK
-        self.appearance_mode_switch.set(dark_is_active)
+        if hasattr(self, "appearance_mode_switch"):
+            self.appearance_mode_switch.setChecked(self.settings.appearance_mode == APPEARANCE_DARK)
 
     def set_widget_visibility(self, visible: bool, *, persist: bool = True) -> bool:
-        """Применяет, сохраняет и отражает единое состояние видимости виджета."""
-        requested_visibility = bool(visible)
-        previous_setting = bool(self.settings.widget_enabled)
-        self.settings.widget_enabled = requested_visibility
+        requested = bool(visible)
+        previous = bool(self.settings.widget_enabled)
+        self.settings.widget_enabled = requested
         error: Exception | None = None
         try:
             self.widget_window.apply_settings(self.settings)
-            if self.widget_window.is_visible() != requested_visibility:
+            if self.widget_window.is_visible() != requested:
                 raise RuntimeError("окно не перешло в запрошенное состояние")
-        except Exception as caught_error:  # UI boundary: show must not stop the timer.
-            error = caught_error
-            if requested_visibility:
+        except Exception as caught:
+            error = caught
+            if requested:
                 self.widget_window.discard_window()
-
-        actual_visibility = self.widget_window.is_visible()
-        self.settings.widget_enabled = actual_visibility
-        if (
-            persist and previous_setting != actual_visibility
-        ) or actual_visibility != requested_visibility:
+        actual = self.widget_window.is_visible()
+        self.settings.widget_enabled = actual
+        if (persist and previous != actual) or actual != requested:
             try:
                 save_app_settings(SETTINGS_FILE, self.settings)
             except OSError as save_error:
-                if error is None:
-                    error = save_error
+                error = error or save_error
         self._sync_widget_visibility()
-
         if error is not None:
-            action = "показать" if requested_visibility else "скрыть"
-            messagebox.showwarning(
-                "Виджет",
-                f"Не удалось {action} виджет: {error}",
-            )
+            QMessageBox.warning(self, "Виджет", f"Не удалось {'показать' if requested else 'скрыть'} виджет: {error}")
             return False
         return True
 
     def _sync_widget_visibility(self) -> None:
-        """Сверяет переключатель и настройку с фактическим Toplevel."""
         visible = self.widget_window.is_visible()
         self.settings.widget_enabled = visible
         if hasattr(self, "widget_visibility_switch"):
-            self.widget_visibility_switch.set(visible)
+            self.widget_visibility_switch.setChecked(visible)
 
     def _on_widget_layout_changed(self, settings: AppSettings) -> None:
-        """Синхронизирует ручной размер с уже открытой формой настроек."""
         self.settings = settings
         if hasattr(self, "settings_view"):
             self.settings_view.sync_widget_layouts(settings)
 
     def continue_after_notification(self) -> None:
-        """Продолжает таймер через общий обработчик кнопок уведомления и окна."""
         self.continue_manual_transition()
 
     def continue_manual_transition(self) -> None:
-        """Один раз сохраняет превышение и запускает ожидающий период."""
         overrun = self.timer.continue_to_next_period()
-        if overrun is None:
-            self._refresh_labels()
-            return
-
-        self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
-        self.notifications.dismiss()
-        self.stats_view.refresh()
-        self._sync_timer_buttons()
+        if overrun is not None:
+            self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
+            self.notifications.dismiss()
+            self.stats_view.refresh()
         self._refresh_labels()
 
     def _schedule_tick(self) -> None:
-        """Обновляет таймер один раз в секунду через планировщик Tkinter."""
+        """Совместимый публичный запуск единственного секундного QTimer."""
+        if not self._tick_timer.isActive():
+            self._tick_timer.start()
+
+    def _tick_once(self) -> None:
         completed_period = self.timer.tick()
         if completed_period is not None:
             self.statistics.record_completed_period(
@@ -654,144 +537,83 @@ class MainWindow:
             )
             self.stats_view.refresh()
         self._refresh_labels()
-        self.root.after(1000, self._schedule_tick)
 
     def _refresh_labels(self) -> None:
-        """Обновляет подписи в интерфейсе по текущему состоянию таймера."""
-        controller = getattr(self, "overrun_visual_controller", None)
-        if controller is None or not controller.preview_active:
-            self.mode_label.config(
-                text=self.timer.mode_name(),
-                style=self.theme_manager.mode_style(
-                    self.timer.state.mode,
-                    self.timer.state.waiting_for_continue,
-                ),
+        previewing = self.overrun_visual_controller.preview_active
+        if not previewing:
+            status = "Период завершён — превышение считается до продолжения" if self.timer.state.waiting_for_continue else ""
+            self.timer_visual.set_state(
+                self.timer.mode_name(),
+                self.timer.formatted_time(),
+                self.timer.state.overrun_mode or self.timer.state.mode,
+                self.timer.state.waiting_for_continue,
+                status,
             )
-            self.time_label.config(text=self.timer.formatted_time())
         self.widget_window.update()
         self._sync_overrun_visual()
+        self._sync_timer_buttons()
 
         if self.timer.state.waiting_for_continue:
-            self.status_label.config(
-                text="Период завершен — превышение считается до продолжения",
-            )
-            self.start_button.config(state=tk.DISABLED)
-            self.pause_button.config(state=tk.DISABLED, text="Пауза")
-            self.skip_button.config(state=tk.DISABLED)
-            self.reset_button.config(state=tk.DISABLED)
-            self.continue_button.config(state=tk.NORMAL)
-            return
-
-        self.skip_button.config(state=tk.NORMAL)
-        self.reset_button.config(state=tk.NORMAL)
-        self.continue_button.config(state=tk.DISABLED)
-        if self.timer.state.is_running:
-            self.status_label.config(text="Таймер запущен")
-            self.pause_button.config(text="Пауза")
-        elif str(self.pause_button["state"]) == tk.DISABLED:
-            self.status_label.config(text="Таймер остановлен")
-            self.pause_button.config(text="Пауза")
+            status_text = "Превышение учитывается"
+        elif self.timer.state.is_running:
+            status_text = "Таймер запущен"
+        elif self.timer.state.remaining_seconds < self.timer.current_period_duration_seconds():
+            status_text = "Таймер на паузе"
         else:
-            self.status_label.config(text="Таймер на паузе")
-            self.pause_button.config(text="Продолжить")
+            status_text = "Таймер остановлен"
+        self.status_label.setText(status_text)
 
     def _sync_overrun_visual(self) -> None:
-        """Передаёт контроллеру только фактический переход в/из превышения."""
-        if not hasattr(self, "overrun_visual_controller"):
-            return
         state = self.timer.state
-        mode = state.overrun_mode or state.mode
         self.overrun_visual_controller.sync_actual(
             state.waiting_for_continue,
-            mode,
+            state.overrun_mode or state.mode,
             self.settings.overrun_visual,
             self.theme_manager.palette,
         )
 
     def _apply_overrun_visual_frame(self, frame: OverrunVisualFrame) -> None:
-        """Применяет единый кадр к карточке и единственному окну виджета."""
-        self.theme_manager.apply_timer_effect(
-            frame.digits_color,
-            frame.card_background,
+        self.timer_visual.apply_overrun_frame(
+            frame,
+            short_format=self.settings.time_display_format == "MM:SS",
         )
-        if hasattr(self, "timer_border"):
-            palette = self.theme_manager.palette
-            background = frame.card_background or palette.card_background
-            border = frame.border_color or background
-            self.timer_border.configure(
-                bg=background,
-                highlightbackground=border,
-                highlightcolor=border,
+        self.widget_window.apply_overrun_visual(frame)
+        if not frame.active and not frame.preview:
+            self.timer_visual.reset_preview_state(
+                self.timer.mode_name(),
+                self.timer.formatted_time(),
+                self.timer.state.overrun_mode or self.timer.state.mode,
+                self.timer.state.waiting_for_continue,
             )
-            self.timer_display.configure(bg=background)
-            self.time_label.configure(
-                font=("Segoe UI Semibold", max(20, round(52 * frame.digit_scale))),
-            )
-            draw_beacon(self.main_left_beacon, frame, palette)
-            draw_beacon(self.main_right_beacon, frame, palette)
-            draw_wave(self.main_wave_canvas, frame, palette)
-        if hasattr(self, "widget_window"):
-            self.widget_window.apply_overrun_visual(frame)
-        if not hasattr(self, "mode_label"):
-            return
-
-        if frame.preview and frame.mode is not None:
-            names = {
-                TimerMode.WORK: "Переработка",
-                TimerMode.SHORT_BREAK: "Короткий отдых сверх нормы",
-                TimerMode.LONG_BREAK: "Длинный отдых сверх нормы",
-            }
-            preview_time = (
-                "+00:03"
-                if self.settings.time_display_format == TimeDisplayFormat.MINUTES_SECONDS.value
-                else "+00:00:03"
-            )
-            self.mode_label.config(
-                text=names[frame.mode],
-                style=self.theme_manager.mode_style(frame.mode, True),
-            )
-            self.time_label.config(text=preview_time)
-        elif not frame.active:
-            self.mode_label.config(
-                text=self.timer.mode_name(),
-                style=self.theme_manager.mode_style(
-                    self.timer.state.mode,
-                    self.timer.state.waiting_for_continue,
-                ),
-            )
-            self.time_label.config(text=self.timer.formatted_time())
 
     def _sync_timer_buttons(self) -> None:
-        """Синхронизирует кнопки после команд из трея."""
-        if self.timer.state.waiting_for_continue:
-            self.start_button.config(state=tk.DISABLED)
-            self.pause_button.config(state=tk.DISABLED, text="Пауза")
-            self.skip_button.config(state=tk.DISABLED)
-            self.reset_button.config(state=tk.DISABLED)
-            self.continue_button.config(state=tk.NORMAL)
-            return
-
-        self.skip_button.config(state=tk.NORMAL)
-        self.reset_button.config(state=tk.NORMAL)
-        self.continue_button.config(state=tk.DISABLED)
-        if self.timer.state.is_running:
-            self.start_button.config(state=tk.DISABLED)
-            self.pause_button.config(state=tk.NORMAL, text="Пауза")
-        else:
-            self.start_button.config(state=tk.NORMAL)
-            self.pause_button.config(state=tk.NORMAL, text="Продолжить")
+        waiting = self.timer.state.waiting_for_continue
+        running = self.timer.state.is_running
+        progressed = self.timer.state.remaining_seconds < self.timer.current_period_duration_seconds()
+        self.continue_button.setVisible(waiting)
+        self.continue_button.setEnabled(waiting)
+        for button in (self.start_button, self.pause_button, self.skip_button, self.reset_button):
+            button.setEnabled(not waiting)
+        self.start_button.setEnabled(not waiting and not running)
+        self.pause_button.setEnabled(not waiting and (running or progressed))
+        self.pause_button.setText("Пауза" if running else "Продолжить")
 
     def _duration_settings_changed(self, new_settings: AppSettings) -> bool:
-        """Проверяет, изменились ли длительности периодов таймера."""
         return (
             self.settings.work_minutes != new_settings.work_minutes
             or self.settings.short_break_minutes != new_settings.short_break_minutes
             or self.settings.long_break_minutes != new_settings.long_break_minutes
         )
 
-    def _schedule(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Безопасно выполняет команду трея в потоке Tkinter."""
-        def wrapped() -> None:
-            self.root.after(0, callback)
 
-        return wrapped
+def main_window_snapshot_settings(window: MainWindow) -> dict[str, object]:
+    """Минимальный диагностический срез для UI-тестов без чтения JSON."""
+    return {
+        "mode": window.timer.state.mode,
+        "remaining_seconds": window.timer.state.remaining_seconds,
+        "running": window.timer.state.is_running,
+        "waiting": window.timer.state.waiting_for_continue,
+        "theme": window.settings.theme_name,
+        "appearance": window.settings.appearance_mode,
+        "widget_visible": window.widget_window.is_visible(),
+    }

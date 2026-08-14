@@ -1,9 +1,25 @@
-"""Редактор светлого и тёмного вариантов пользовательской темы."""
+"""Редактор светлого и тёмного вариантов пользовательской темы Qt."""
+
+from __future__ import annotations
 
 from copy import deepcopy
-import tkinter as tk
-from tkinter import colorchooser, messagebox, ttk
-from typing import Callable
+from collections.abc import Callable
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.theme import (
     APPEARANCE_DARK,
@@ -17,60 +33,24 @@ from app.theme import (
     palette_contrast_warnings,
     palette_from_data,
 )
+from app.ui.components import AppButton, Card, ColorSwatch, PageHeader
+from app.ui.design_system import TOKENS
 
 
 COLOR_GROUPS = (
-    (
-        "Поверхности",
-        (
-            ("background", "Основной фон"),
-            ("card_background", "Фон карточек"),
-            ("secondary_background", "Дополнительный фон"),
-            ("border", "Границы"),
-        ),
-    ),
-    (
-        "Текст и элементы управления",
-        (
-            ("text_primary", "Основной текст"),
-            ("text_secondary", "Вторичный текст"),
-            ("accent", "Акцент"),
-            ("accent_hover", "Наведение на акцент"),
-            ("button_background", "Цвет кнопок"),
-            ("button_text", "Текст кнопок"),
-            ("on_accent", "Текст акцентных кнопок"),
-            ("focus", "Фокус"),
-            ("disabled", "Неактивные элементы"),
-        ),
-    ),
-    (
-        "Служебные состояния",
-        (
-            ("success", "Успех"),
-            ("warning", "Предупреждение"),
-            ("error", "Ошибка"),
-        ),
-    ),
-    (
-        "Состояния таймера",
-        (
-            ("work", "Работа"),
-            ("short_break", "Короткий отдых"),
-            ("long_break", "Длинный отдых"),
-            ("overwork", "Переработка"),
-            ("short_break_overrun", "Короткий отдых сверх нормы"),
-            ("long_break_overrun", "Длинный отдых сверх нормы"),
-        ),
-    ),
+    ("Поверхности", (("background", "Основной фон"), ("card_background", "Фон карточек"), ("secondary_background", "Дополнительный фон"), ("border", "Границы"))),
+    ("Текст и управление", (("text_primary", "Основной текст"), ("text_secondary", "Вторичный текст"), ("accent", "Акцент"), ("accent_hover", "Наведение"), ("button_background", "Цвет кнопок"), ("button_text", "Текст кнопок"), ("on_accent", "Текст акцентных кнопок"), ("focus", "Фокус"), ("disabled", "Неактивные элементы"))),
+    ("Служебные состояния", (("success", "Успех"), ("warning", "Предупреждение"), ("error", "Ошибка"))),
+    ("Состояния таймера", (("work", "Работа"), ("short_break", "Короткий отдых"), ("long_break", "Длинный отдых"), ("overwork", "Переработка"), ("short_break_overrun", "Короткий отдых сверх нормы"), ("long_break_overrun", "Длинный отдых сверх нормы"))),
 )
 
 
-class CustomThemeEditor:
-    """Модальное окно, сохраняющее черновик только после явного применения."""
+class CustomThemeEditor(QDialog):
+    """Модальный редактор с отдельным черновиком и безопасной отменой."""
 
     def __init__(
         self,
-        parent: tk.Widget,
+        parent: QWidget,
         custom_theme: object,
         initial_mode: str,
         on_preview: Callable[[dict[str, dict[str, str]], str], None],
@@ -78,309 +58,241 @@ class CustomThemeEditor:
         on_cancel: Callable[[], None],
         theme_manager: ThemeManager,
     ) -> None:
+        super().__init__(parent)
+        self.window = self
         self.on_preview = on_preview
         self.on_apply = on_apply
         self.on_cancel = on_cancel
         self.theme_manager = theme_manager
         self.draft = CustomThemeDraft(custom_theme)
-        self.mode_var = tk.StringVar(value=initial_mode)
-        self.base_var = tk.StringVar(value=BUILTIN_THEME_NAMES[0])
-        self.color_vars: dict[str, tk.StringVar] = {}
-        self.swatches: dict[str, tk.Label] = {}
-        self._last_mode = initial_mode
+        self._mode = initial_mode if initial_mode in (APPEARANCE_LIGHT, APPEARANCE_DARK) else APPEARANCE_LIGHT
         self._closed = False
-
-        self.window = tk.Toplevel(parent)
-        self.window.title("Пользовательская тема")
-        self.window.geometry("760x700")
-        self.window.minsize(680, 560)
-        self.window.transient(parent.winfo_toplevel())
-        self.window.protocol("WM_DELETE_WINDOW", self.cancel)
-        self.window.bind("<Escape>", lambda _event: self.cancel())
+        self.color_edits: dict[str, QLineEdit] = {}
+        self.swatches: dict[str, ColorSwatch] = {}
+        self.setWindowTitle("Пользовательская тема")
+        self.resize(820, 760)
+        self.setMinimumSize(700, 560)
+        self.setModal(False)
         self._build_ui()
-        self._load_mode(initial_mode)
-        self.theme_manager.apply_to_window(self.window)
-        self.window.lift()
-        self.window.focus_set()
+        self._load_mode(self._mode)
+        theme_manager.apply_to_window(self)
+        self.show()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(TOKENS.spacing.lg, TOKENS.spacing.lg, TOKENS.spacing.lg, TOKENS.spacing.lg)
+        root.setSpacing(TOKENS.spacing.md)
+        root.addWidget(PageHeader("Пользовательская тема", "Редактируйте светлый и тёмный режимы независимо.", self))
+
+        toolbar = Card(self, padding=TOKENS.spacing.md)
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Редактируемый режим", toolbar))
+        self.mode_box = QComboBox(toolbar)
+        for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
+            self.mode_box.addItem(APPEARANCE_LABELS[mode], mode)
+        self.mode_box.setCurrentIndex(0 if self._mode == APPEARANCE_LIGHT else 1)
+        self.mode_box.currentIndexChanged.connect(self._mode_changed)
+        bar.addWidget(self.mode_box)
+        bar.addSpacing(TOKENS.spacing.lg)
+        bar.addWidget(QLabel("Создать на основе", toolbar))
+        self.base_box = QComboBox(toolbar)
+        self.base_box.addItems(BUILTIN_THEME_NAMES)
+        bar.addWidget(self.base_box)
+        create_button = AppButton("Создать копию", toolbar, theme_manager=self.theme_manager)
+        create_button.clicked.connect(self._create_from_base)
+        bar.addWidget(create_button)
+        bar.addStretch(1)
+        toolbar.content_layout.addLayout(bar)
+        root.addWidget(toolbar)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget(scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, TOKENS.spacing.xs, 0)
+        content_layout.setSpacing(TOKENS.spacing.md)
+        for title, rows in COLOR_GROUPS:
+            card = Card(content, padding=TOKENS.spacing.md)
+            heading = QLabel(title, card)
+            heading.setProperty("role", "sectionTitle")
+            card.content_layout.addWidget(heading)
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(TOKENS.spacing.sm)
+            grid.setVerticalSpacing(TOKENS.spacing.xs)
+            for row, (key, label) in enumerate(rows):
+                grid.addWidget(QLabel(label, card), row, 0)
+                swatch = ColorSwatch("#000000", card)
+                swatch.clicked.connect(lambda _checked=False, selected=key: self._choose_color(selected))
+                grid.addWidget(swatch, row, 1)
+                edit = QLineEdit(card)
+                edit.setMaxLength(7)
+                edit.setPlaceholderText("#RRGGBB")
+                edit.textChanged.connect(lambda value, selected=key: self._color_text_changed(selected, value))
+                grid.addWidget(edit, row, 2)
+                choose = AppButton("Выбрать", card, variant="ghost", theme_manager=self.theme_manager)
+                choose.clicked.connect(lambda _checked=False, selected=key: self._choose_color(selected))
+                grid.addWidget(choose, row, 3)
+                self.color_edits[key] = edit
+                self.swatches[key] = swatch
+            grid.setColumnStretch(2, 1)
+            card.content_layout.addLayout(grid)
+            content_layout.addWidget(card)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
+        self.contrast_label = QLabel("", self)
+        self.contrast_label.setProperty("role", "caption")
+        self.contrast_label.setWordWrap(True)
+        root.addWidget(self.contrast_label)
+        footer = QHBoxLayout()
+        preview = AppButton("Предпросмотр", self, theme_manager=self.theme_manager)
+        preview.clicked.connect(self.preview)
+        reset_mode = AppButton("Сбросить текущий режим", self, theme_manager=self.theme_manager)
+        reset_mode.clicked.connect(self._reset_mode)
+        reset_all = AppButton("Сбросить всю тему", self, variant="danger", theme_manager=self.theme_manager)
+        reset_all.clicked.connect(self._reset_all)
+        cancel = AppButton("Отмена", self, variant="ghost", theme_manager=self.theme_manager)
+        cancel.clicked.connect(self.cancel)
+        apply_button = AppButton("Применить", self, variant="primary", theme_manager=self.theme_manager)
+        apply_button.clicked.connect(self.apply)
+        footer.addWidget(preview)
+        footer.addWidget(reset_mode)
+        footer.addWidget(reset_all)
+        footer.addStretch(1)
+        footer.addWidget(cancel)
+        footer.addWidget(apply_button)
+        root.addLayout(footer)
 
     def is_open(self) -> bool:
-        """Сообщает, существует ли единственное окно редактора."""
-        try:
-            return not self._closed and bool(self.window.winfo_exists())
-        except tk.TclError:
-            return False
+        return not self._closed and self.isVisible()
 
     def focus(self) -> None:
-        """Поднимает уже открытый редактор вместо создания второго."""
-        if self.is_open():
-            self.window.deiconify()
-            self.window.lift()
-            self.window.focus_force()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def preview(self) -> bool:
-        """Временно применяет текущий черновик без записи настроек."""
-        if not self._store_form(self._last_mode):
+        if not self._store_form(self._mode, warn=True):
             return False
-        mode = self.mode_var.get()
-        self.on_preview(deepcopy(self.draft.value), mode)
-        self._show_contrast_status(self._palette_for_mode(mode))
+        self.on_preview(deepcopy(self.draft.value), self._mode)
+        self._show_contrast_status(self._palette_for_mode(self._mode))
         return True
 
     def apply(self) -> bool:
-        """Проверяет оба режима, подтверждает низкий контраст и сохраняет результат."""
-        if not self._store_form(self._last_mode):
+        if not self._store_form(self._mode, warn=True):
             return False
-        warnings: list[str] = []
+        warnings = []
         for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
-            for warning in palette_contrast_warnings(self._palette_for_mode(mode)):
-                warnings.append(f"{APPEARANCE_LABELS[mode]}: {warning}")
+            warnings.extend(
+                f"{APPEARANCE_LABELS[mode]}: {warning}"
+                for warning in palette_contrast_warnings(self._palette_for_mode(mode))
+            )
         if warnings:
             details = "\n".join(f"• {warning}" for warning in warnings[:10])
-            if len(warnings) > 10:
-                details += f"\n• …и ещё {len(warnings) - 10}"
-            confirmed = messagebox.askyesno(
+            answer = QMessageBox.warning(
+                self,
                 "Низкий контраст",
-                "Некоторые сочетания имеют контраст ниже 4,5:1:\n\n"
-                f"{details}\n\nСохранить палитру осознанно?",
-                parent=self.window,
+                "Некоторые сочетания ниже 4,5:1:\n\n" + details + "\n\nСохранить осознанно?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
             )
-            if not confirmed:
+            if answer != QMessageBox.StandardButton.Save:
                 return False
-        result = self.draft.applied()
-        mode = self.mode_var.get()
-        self.on_apply(result, mode)
-        self._destroy()
+        self.on_apply(self.draft.applied(), self._mode)
+        self._closed = True
+        self.accept()
         return True
 
     def cancel(self) -> None:
-        """Отменяет весь черновик и восстанавливает ранее сохранённое оформление."""
         if self._closed:
             return
-        self.draft.cancel()
+        self._closed = True
         self.on_cancel()
-        self._destroy()
+        self.reject()
 
-    def reset_current_mode(self) -> None:
-        """Возвращает редактируемый режим к соответствующей Comet."""
-        self.draft.reset_mode(self._last_mode)
-        self._load_mode(self._last_mode)
-        self.preview()
+    def reject(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.on_cancel()
+        super().reject()
 
-    def reset_all(self) -> None:
-        """Возвращает светлую и тёмную копии к безопасной Comet."""
-        if not messagebox.askyesno(
-            "Сброс пользовательской темы",
-            "Сбросить светлый и тёмный режимы к палитре Comet?",
-            parent=self.window,
-        ):
+    def _mode_changed(self, _index: int) -> None:
+        new_mode = str(self.mode_box.currentData())
+        if not self._store_form(self._mode, warn=True):
+            self.mode_box.blockSignals(True)
+            self.mode_box.setCurrentIndex(0 if self._mode == APPEARANCE_LIGHT else 1)
+            self.mode_box.blockSignals(False)
             return
-        self.draft.reset_all()
-        self._load_mode(self._last_mode)
-        self.preview()
+        self._mode = new_mode
+        self._load_mode(new_mode)
 
-    def _build_ui(self) -> None:
-        header = ttk.Frame(self.window, padding=(18, 16, 18, 10))
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="Пользовательская тема", style="Heading.TLabel").pack(
-            side=tk.LEFT,
-        )
-
-        mode_card = ttk.Frame(self.window, style="Card.TFrame", padding=12)
-        mode_card.pack(fill=tk.X, padx=18, pady=(0, 10))
-        ttk.Label(mode_card, text="Редактировать:", style="Card.TLabel").pack(
-            side=tk.LEFT,
-            padx=(0, 10),
-        )
-        for mode in (APPEARANCE_LIGHT, APPEARANCE_DARK):
-            ttk.Radiobutton(
-                mode_card,
-                text=APPEARANCE_LABELS[mode],
-                value=mode,
-                variable=self.mode_var,
-                command=self._switch_mode,
-                style="Card.TRadiobutton",
-            ).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Combobox(
-            mode_card,
-            textvariable=self.base_var,
-            values=BUILTIN_THEME_NAMES,
-            state="readonly",
-            width=10,
-        ).pack(side=tk.LEFT, padx=(16, 6))
-        ttk.Button(
-            mode_card,
-            text="Создать на основе",
-            command=self._create_from_base,
-        ).pack(side=tk.LEFT)
-
-        canvas_frame = ttk.Frame(self.window)
-        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=18)
-        canvas = tk.Canvas(canvas_frame, highlightthickness=0, borderwidth=0)
-        scrollbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=canvas.yview)
-        content = ttk.Frame(canvas, padding=(0, 0, 8, 0))
-        content_id = canvas.create_window((0, 0), window=content, anchor=tk.NW)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        content.bind(
-            "<Configure>",
-            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-        canvas.bind(
-            "<Configure>",
-            lambda event: canvas.itemconfigure(content_id, width=event.width),
-        )
-
-        for group_name, color_fields in COLOR_GROUPS:
-            group = ttk.LabelFrame(content, text=group_name, padding=12)
-            group.pack(fill=tk.X, pady=(0, 10))
-            group.columnconfigure(1, weight=1)
-            for row, (field_name, label) in enumerate(color_fields):
-                variable = tk.StringVar()
-                self.color_vars[field_name] = variable
-                ttk.Label(group, text=label, style="Card.TLabel").grid(
-                    row=row,
-                    column=0,
-                    sticky=tk.W,
-                    pady=3,
-                )
-                swatch = tk.Label(group, width=5, relief=tk.FLAT, borderwidth=0)
-                swatch.grid(row=row, column=1, sticky=tk.E, padx=(12, 8), pady=3)
-                self.swatches[field_name] = swatch
-                entry = ttk.Entry(group, textvariable=variable, width=10)
-                entry.grid(row=row, column=2, padx=(0, 8), pady=3)
-                entry.bind(
-                    "<FocusOut>",
-                    lambda _event, name=field_name: self._refresh_swatch(name),
-                )
-                ttk.Button(
-                    group,
-                    text="Выбрать…",
-                    command=lambda name=field_name: self._choose_color(name),
-                ).grid(row=row, column=3, pady=3)
-
-        self.contrast_label = ttk.Label(
-            self.window,
-            text="",
-            style="Secondary.TLabel",
-        )
-        self.contrast_label.pack(fill=tk.X, padx=18, pady=(8, 4))
-
-        footer = ttk.Frame(self.window, padding=(18, 8, 18, 16))
-        footer.pack(fill=tk.X)
-        reset_actions = ttk.Frame(footer)
-        reset_actions.pack(fill=tk.X)
-        ttk.Button(
-            reset_actions,
-            text="Сбросить всю пользовательскую тему",
-            command=self.reset_all,
-        ).pack(side=tk.LEFT)
-        ttk.Button(
-            reset_actions,
-            text="Сбросить текущий режим",
-            command=self.reset_current_mode,
-        ).pack(side=tk.LEFT, padx=(8, 0))
-        primary_actions = ttk.Frame(footer)
-        primary_actions.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(primary_actions, text="Отмена", command=self.cancel).pack(side=tk.RIGHT)
-        ttk.Button(
-            primary_actions,
-            text="Применить",
-            command=self.apply,
-            style="Accent.TButton",
-        ).pack(side=tk.RIGHT, padx=(0, 8))
-        ttk.Button(primary_actions, text="Предпросмотр", command=self.preview).pack(
-            side=tk.RIGHT,
-            padx=(0, 8),
-        )
-
-    def _switch_mode(self) -> None:
-        requested_mode = self.mode_var.get()
-        if not self._store_form(self._last_mode):
-            self.mode_var.set(self._last_mode)
-            return
-        self._last_mode = requested_mode
-        self._load_mode(requested_mode)
-
-    def _create_from_base(self) -> None:
-        if not self._store_form(self._last_mode):
-            return
-        self.draft.create_mode_from(self._last_mode, self.base_var.get())
-        self._load_mode(self._last_mode)
-        self.preview()
-
-    def _load_mode(self, mode: str) -> None:
-        self._last_mode = mode
-        self.mode_var.set(mode)
-        palette_data = self.draft.value[mode]
-        for field_name, variable in self.color_vars.items():
-            variable.set(palette_data[field_name])
-            self._refresh_swatch(field_name)
-        self._show_contrast_status(self._palette_for_mode(mode))
-
-    def _store_form(self, mode: str) -> bool:
-        invalid = [
-            field_name
-            for field_name, variable in self.color_vars.items()
-            if not is_hex_color(variable.get())
-        ]
+    def _store_form(self, mode: str, *, warn: bool) -> bool:
+        data = {}
+        invalid = []
+        for key, edit in self.color_edits.items():
+            value = edit.text().strip().upper()
+            if not is_hex_color(value):
+                invalid.append(key)
+                edit.setProperty("invalid", True)
+                edit.setStyleSheet("border: 2px solid #AA3434;")
+            else:
+                edit.setProperty("invalid", False)
+                edit.setStyleSheet("")
+                data[key] = value
         if invalid:
-            first_name = invalid[0]
-            messagebox.showwarning(
-                "Некорректный цвет",
-                "Используйте формат #RRGGBB. "
-                f"Исправьте поле «{self._field_label(first_name)}».",
-                parent=self.window,
-            )
+            if warn:
+                QMessageBox.warning(self, "Цвет", "Исправьте значения: требуется формат #RRGGBB.")
             return False
-        self.draft.set_mode(
-            mode,
-            {name: variable.get() for name, variable in self.color_vars.items()},
-        )
+        self.draft.set_mode(mode, data)
         return True
 
-    def _choose_color(self, field_name: str) -> None:
-        current = self.color_vars[field_name].get()
-        initial = current if is_hex_color(current) else "#FFFFFF"
-        _rgb, selected = colorchooser.askcolor(
-            color=initial,
-            title=self._field_label(field_name),
-            parent=self.window,
-        )
-        if selected:
-            self.color_vars[field_name].set(selected.upper())
-            self._refresh_swatch(field_name)
+    def _load_mode(self, mode: str) -> None:
+        palette = self.draft.value[mode]
+        for key, edit in self.color_edits.items():
+            edit.blockSignals(True)
+            edit.setText(palette[key])
+            edit.setStyleSheet("")
+            edit.blockSignals(False)
+            self.swatches[key].set_color(palette[key])
+        self._show_contrast_status(self._palette_for_mode(mode))
 
-    def _refresh_swatch(self, field_name: str) -> None:
-        color = self.color_vars[field_name].get().strip()
-        self.swatches[field_name].configure(
-            background=color if is_hex_color(color) else "#FF00FF",
-        )
+    def _choose_color(self, key: str) -> None:
+        current = QColor(self.color_edits[key].text())
+        color = QColorDialog.getColor(current, self, "Выберите цвет")
+        if color.isValid():
+            self.color_edits[key].setText(color.name().upper())
+
+    def _color_text_changed(self, key: str, value: str) -> None:
+        if is_hex_color(value):
+            self.swatches[key].set_color(value.upper())
+
+    def _create_from_base(self) -> None:
+        self.draft.create_mode_from(self._mode, self.base_box.currentText())
+        self._load_mode(self._mode)
+        self.preview()
+
+    def _reset_mode(self) -> None:
+        self.draft.reset_mode(self._mode)
+        self._load_mode(self._mode)
+        self.preview()
+
+    def _reset_all(self) -> None:
+        answer = QMessageBox.question(self, "Сброс темы", "Сбросить оба режима к безопасной теме Comet?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.draft.reset_all()
+        self._load_mode(self._mode)
+        self.preview()
 
     def _palette_for_mode(self, mode: str) -> ThemePalette:
-        fallback = ThemePalette(**self.draft.value[mode])
+        fallback = self.theme_manager.palette
         return palette_from_data(self.draft.value[mode], fallback)
 
     def _show_contrast_status(self, palette: ThemePalette) -> None:
         warnings = palette_contrast_warnings(palette)
         if warnings:
-            self.contrast_label.configure(
-                text=f"Контраст ниже 4,5:1 в сочетаниях: {len(warnings)}. "
-                "Сохранение потребует подтверждения.",
-            )
+            self.contrast_label.setText(f"Проверка контраста: {len(warnings)} сочетаний ниже 4,5:1. При применении потребуется подтверждение.")
         else:
-            self.contrast_label.configure(text="Контраст основных сочетаний: не ниже 4,5:1.")
-
-    def _field_label(self, field_name: str) -> str:
-        for _group, color_fields in COLOR_GROUPS:
-            for name, label in color_fields:
-                if name == field_name:
-                    return label
-        return field_name
-
-    def _destroy(self) -> None:
-        self._closed = True
-        try:
-            self.window.destroy()
-        except tk.TclError:
-            pass
+            self.contrast_label.setText("Проверка контраста: основные сочетания соответствуют ориентиру 4,5:1.")

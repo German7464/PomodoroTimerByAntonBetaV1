@@ -29,6 +29,7 @@ from app.timer_engine import TimerEngine
 from app.ui import main_window as main_window_module
 from app.ui.main_window import MainWindow
 from app.ui.widget_window import WidgetWindow
+from tests.qt_helpers import isolated_main
 from tests.test_timer_engine import finish_current_period, make_settings
 
 
@@ -319,21 +320,12 @@ class ThemeTests(unittest.TestCase):
 
     def test_open_widget_receives_palette_without_replacing_window(self) -> None:
         settings = make_settings()
-        palette = get_palette("Warm", APPEARANCE_DARK)
-        manager = FakeWidgetThemeManager(palette)
-        widget = WidgetWindow.__new__(WidgetWindow)
-        widget.settings = settings
-        widget.window = FakeWindow()
-        original_window = widget.window
-        widget.view = FakeWidgetView()
-        widget.theme_manager = manager
-
-        widget.apply_theme(palette)
-
-        self.assertIs(widget.window, original_window)
-        self.assertEqual(widget.view.applied, [palette])
-        self.assertEqual(widget.view.update_calls, 1)
-        self.assertEqual(manager.windows, [original_window])
+        settings.widget_enabled = True
+        with isolated_main(settings) as (window, _path, _statistics):
+            original_window = window.widget_window.window
+            window.apply_theme_selection("Warm", APPEARANCE_DARK)
+            self.assertIs(window.widget_window.window, original_window)
+            self.assertEqual(window.widget_window.view.timer_visual._palette, window.theme_manager.palette)
 
     def test_timer_modes_and_overrun_keep_distinct_semantic_colors(self) -> None:
         timer = TimerEngine(make_settings())
@@ -353,16 +345,7 @@ class ThemeTests(unittest.TestCase):
         self.assertTrue(timer.formatted_time().startswith("+"))
 
     def test_quick_toggle_and_settings_share_one_state_and_save_once(self) -> None:
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.json"
-            window = MainWindow.__new__(MainWindow)
-            window.settings = make_settings()
-            window.timer = TimerEngine(window.settings)
-            window.theme_manager = FakeThemeManager()
-            window.settings_view = FakeSettingsView()
-            window.appearance_mode_switch = FakeToggle()
-            window.mode_label = FakeLabel()
-
+        with isolated_main(make_settings()) as (window, path, _statistics):
             with (
                 patch.object(main_window_module, "SETTINGS_FILE", path),
                 patch.object(main_window_module, "save_app_settings", wraps=save_app_settings) as save,
@@ -373,8 +356,8 @@ class ThemeTests(unittest.TestCase):
 
             self.assertEqual(window.settings.theme_name, "Aurora")
             self.assertEqual(window.settings.appearance_mode, APPEARANCE_LIGHT)
-            self.assertEqual(window.settings_view.calls[-1], ("Aurora", APPEARANCE_LIGHT))
-            self.assertFalse(window.appearance_mode_switch.value)
+            self.assertEqual(window.settings_view.current_theme_name, "Aurora")
+            self.assertFalse(window.appearance_mode_switch.isChecked())
             self.assertEqual(save.call_count, 2)
             restored = load_app_settings(path)
             self.assertEqual(restored.theme_name, "Aurora")

@@ -1,151 +1,88 @@
-"""Постоянная и временная системная непрозрачность виджета."""
+"""Постоянная и временная прозрачность Qt-виджета."""
 
-import inspect
 import unittest
 from unittest.mock import patch
 
-from app.ui import main_window as main_window_module
-from app.ui.main_window import MainWindow
-from app.overrun_effects import default_overrun_visual
-from app.timer_engine import TimerEngine
-from app.ui.settings_window import SettingsView
-from app.ui.widget_window import WidgetWindow
-from tests.test_timer_engine import make_settings
+from PySide6.QtTest import QTest
 
-
-class FakeTopLevel:
-    def __init__(self) -> None:
-        self.alpha = None
-
-    def attributes(self, name: str, value: float) -> None:
-        if name == "-alpha":
-            self.alpha = value
-
-
-class FakeRoot:
-    def __init__(self) -> None:
-        self.next_id = 0
-        self.jobs: dict[str, object] = {}
-
-    def after(self, _delay: int, callback):
-        self.next_id += 1
-        job_id = str(self.next_id)
-        self.jobs[job_id] = callback
-        return job_id
-
-    def after_cancel(self, job_id: str) -> None:
-        self.jobs.pop(job_id, None)
-
-
-class FakeOpacityWidget:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def apply_opacity(self) -> None:
-        self.calls += 1
-
-
-class FakeSettingsView:
-    def __init__(self) -> None:
-        self.overrun_opaque = None
-
-    def sync_widget_opacity(self, _opacity: int) -> None:
-        pass
-
-    def sync_overrun_widget_opacity(self, enabled: bool) -> None:
-        self.overrun_opaque = enabled
+from app.storage import load_app_settings
+from app.ui import main_window as main_module
+from app.ui.components import SwitchRow
+from app.widget_settings import effective_widget_alpha, normalize_widget_opacity
+from tests.qt_helpers import APP, isolated_main
+from tests.test_timer_engine import finish_current_period, make_settings
 
 
 class WidgetOpacityTests(unittest.TestCase):
-    def _widget(self, opacity: int, opaque: bool) -> WidgetWindow:
+    def test_safe_range_is_five_to_one_hundred_percent(self) -> None:
+        self.assertEqual(normalize_widget_opacity(0), 5)
+        self.assertEqual(normalize_widget_opacity(5), 5)
+        self.assertEqual(normalize_widget_opacity(37), 37)
+        self.assertEqual(normalize_widget_opacity(999), 100)
+        self.assertAlmostEqual(effective_widget_alpha(5, False, False), 0.05)
+        self.assertEqual(effective_widget_alpha(100, False, False), 1.0)
+
+    def test_real_overrun_forces_one_and_continue_restores_exact_value(self) -> None:
         settings = make_settings()
-        settings.widget_opacity = opacity
-        settings.overrun_visual = default_overrun_visual()
-        settings.overrun_visual["opaque_widget_during_overrun"] = opaque
-        widget = WidgetWindow.__new__(WidgetWindow)
-        widget.settings = settings
-        widget.timer = TimerEngine(settings)
-        widget.window = FakeTopLevel()
-        return widget
-
-    def test_real_overrun_forces_one_and_restores_exact_value(self) -> None:
-        widget = self._widget(17, True)
-        self.assertEqual(widget.apply_opacity(), 0.17)
-
-        widget.timer.state.waiting_for_continue = True
-        self.assertEqual(widget.apply_opacity(), 1.0)
-        self.assertEqual(widget.settings.widget_opacity, 17)
-
-        widget.timer.state.waiting_for_continue = False
-        self.assertEqual(widget.apply_opacity(), 0.17)
-        self.assertEqual(widget.window.alpha, 0.17)
+        settings.widget_enabled = True
+        settings.widget_opacity = 37
+        settings.overrun_visual["opaque_widget_during_overrun"] = True
+        with isolated_main(settings) as (window, _path, _statistics):
+            self.assertAlmostEqual(window.widget_window.apply_opacity(), 0.37)
+            finish_current_period(window.timer)
+            window.timer.tick()
+            window._refresh_labels()
+            self.assertEqual(window.widget_window.apply_opacity(), 1.0)
+            window.continue_manual_transition()
+            self.assertAlmostEqual(window.widget_window.apply_opacity(), 0.37)
+            self.assertEqual(window.settings.widget_opacity, 37)
 
     def test_disabling_temporary_opacity_during_overrun_restores_immediately(self) -> None:
-        widget = self._widget(41, True)
-        widget.timer.state.waiting_for_continue = True
-        self.assertEqual(widget.apply_opacity(), 1.0)
+        settings = make_settings()
+        settings.widget_enabled = True
+        settings.widget_opacity = 23
+        settings.overrun_visual["opaque_widget_during_overrun"] = True
+        with isolated_main(settings) as (window, _path, _statistics):
+            finish_current_period(window.timer)
+            window.timer.tick()
+            self.assertEqual(window.widget_window.apply_opacity(), 1.0)
+            window.set_overrun_widget_opacity(False)
+            self.assertAlmostEqual(window.widget_window.apply_opacity(), 0.23)
 
-        widget.settings.overrun_visual["opaque_widget_during_overrun"] = False
+    def test_temporary_value_is_not_saved_as_persistent(self) -> None:
+        settings = make_settings()
+        settings.widget_enabled = True
+        settings.widget_opacity = 19
+        settings.overrun_visual["opaque_widget_during_overrun"] = True
+        with isolated_main(settings) as (window, path, _statistics):
+            finish_current_period(window.timer)
+            window.timer.tick()
+            window.widget_window.apply_opacity()
+            window._save_settings_now()
+            self.assertEqual(load_app_settings(path).widget_opacity, 19)
 
-        self.assertEqual(widget.apply_opacity(), 0.41)
-        self.assertEqual(widget.settings.widget_opacity, 41)
+    def test_slider_changes_share_one_deferred_write(self) -> None:
+        settings = make_settings()
+        settings.widget_enabled = True
+        with isolated_main(settings) as (window, _path, _statistics):
+            with patch.object(main_module, "save_app_settings") as save:
+                window.set_widget_opacity(20)
+                window.set_widget_opacity(21)
+                window.set_widget_opacity(22)
+                QTest.qWait(560)
+                APP.processEvents()
+            save.assert_called_once()
+            self.assertEqual(window.settings.widget_opacity, 22)
 
-    def test_temporary_opacity_uses_common_toggle_and_existing_callback(self) -> None:
-        view = SettingsView.__new__(SettingsView)
-        changes: list[bool] = []
-        view.on_overrun_opacity_change = changes.append
-        view._on_overrun_widget_opacity_changed(True)
-        self.assertEqual(changes, [True])
-
-        source = inspect.getsource(SettingsView._build_overrun_settings)
-        self.assertIn("Делать виджет непрозрачным при превышении", source)
-        self.assertIn("self._add_toggle", source)
-        self.assertNotIn("ttk.Checkbutton", source)
-
-    def test_opacity_ui_uses_clear_label_and_explanation(self) -> None:
-        source = inspect.getsource(SettingsView._build_widget_settings)
-        self.assertIn("Непрозрачность виджета", source)
-        self.assertIn("Чем ниже значение, тем прозрачнее виджет.", source)
-        self.assertIn("command=self._on_widget_opacity_changed", source)
-
-    def test_slider_changes_share_one_deferred_settings_write(self) -> None:
-        window = MainWindow.__new__(MainWindow)
-        window.settings = make_settings()
-        window.root = FakeRoot()
-        window.widget_window = FakeOpacityWidget()
-        window.settings_view = FakeSettingsView()
-        window._settings_save_after_id = None
-
-        with patch.object(main_window_module, "save_app_settings") as save:
-            for opacity in (10, 20, 33):
-                window.set_widget_opacity(opacity)
-            self.assertEqual(len(window.root.jobs), 1)
-            self.assertEqual(window.settings.widget_opacity, 33)
-            self.assertEqual(window.widget_window.calls, 3)
-            self.assertEqual(save.call_count, 0)
-
-            callback = next(iter(window.root.jobs.values()))
-            callback()
-            self.assertEqual(save.call_count, 1)
-
-    def test_opaque_toggle_syncs_external_state_and_saves_only_changes(self) -> None:
-        window = MainWindow.__new__(MainWindow)
-        window.settings = make_settings()
-        window.settings.overrun_visual = default_overrun_visual()
-        window.root = FakeRoot()
-        window.widget_window = FakeOpacityWidget()
-        window.settings_view = FakeSettingsView()
-        window._settings_save_after_id = None
-
-        window.set_overrun_widget_opacity(False)
-        self.assertEqual(window.root.jobs, {})
-        self.assertEqual(window.widget_window.calls, 0)
-        self.assertFalse(window.settings_view.overrun_opaque)
-
-        window.set_overrun_widget_opacity(True)
-        self.assertEqual(len(window.root.jobs), 1)
-        self.assertEqual(window.widget_window.calls, 1)
-        self.assertTrue(window.settings_view.overrun_opaque)
+    def test_opacity_ui_has_clear_text_and_common_toggle(self) -> None:
+        with isolated_main() as (window, _path, _statistics):
+            view = window.settings_view
+            self.assertEqual(view.widget_opacity.minimum(), 5)
+            self.assertEqual(view.widget_opacity.maximum(), 100)
+            self.assertEqual(view.widget_opacity_label.text(), f"{view.widget_opacity.value()}%")
+            self.assertIsInstance(view.overrun_opaque_widget, SwitchRow)
+            labels = [label.text() for label in view.findChildren(type(view.widget_opacity_label))]
+            self.assertTrue(any("Чем ниже значение" in text for text in labels))
 
 
 if __name__ == "__main__":

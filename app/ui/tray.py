@@ -1,14 +1,14 @@
-"""Интеграция приложения с системным треем Windows."""
+"""Интеграция с системным треем через Qt, без отдельного потока."""
 
 from collections.abc import Callable
-import threading
 
-import pystray
-from PIL import Image, ImageDraw
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
 class TrayController:
-    """Управляет иконкой в трее и прокидывает команды в главное окно."""
+    """Единственная иконка трея, работающая в GUI-потоке Qt."""
 
     def __init__(
         self,
@@ -18,54 +18,60 @@ class TrayController:
         reset_timer: Callable[[], None],
         exit_app: Callable[[], None],
     ) -> None:
-        """Получает callback-и главного окна и создает pystray.Icon."""
+        app = QApplication.instance()
+        if app is None:
+            raise RuntimeError("TrayController требует созданный QApplication")
         self._show_window = show_window
-        self._hide_window = hide_window
-        self._toggle_timer = toggle_timer
-        self._reset_timer = reset_timer
-        self._exit_app = exit_app
-        self._thread: threading.Thread | None = None
-        self.icon = pystray.Icon(
-            "Pomodoro Timer",
-            self._create_icon_image(),
-            "Pomodoro Timer",
-            self._create_menu(),
-        )
+        self.icon = QSystemTrayIcon(self._create_icon(), app)
+        self.icon.setToolTip("Pomodoro Timer")
+        menu = QMenu()
+        self.menu = menu
+        for text, callback in (
+            ("Показать окно", show_window),
+            ("Скрыть окно", hide_window),
+            ("Старт / Пауза", toggle_timer),
+            ("Сброс", reset_timer),
+        ):
+            action = QAction(text, menu)
+            action.triggered.connect(callback)
+            menu.addAction(action)
+        menu.addSeparator()
+        exit_action = QAction("Выход", menu)
+        exit_action.triggered.connect(exit_app)
+        menu.addAction(exit_action)
+        self.icon.setContextMenu(menu)
+        self.icon.activated.connect(self._activated)
 
     def start(self) -> None:
-        """Запускает иконку трея в отдельном daemon-потоке."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-
-        self._thread = threading.Thread(target=self.icon.run, daemon=True)
-        self._thread.start()
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.icon.show()
 
     def stop(self) -> None:
-        """Останавливает иконку трея перед выходом из приложения."""
-        self.icon.stop()
+        self.icon.hide()
 
-    def _create_menu(self) -> pystray.Menu:
-        """Создает меню трея с основными действиями приложения."""
-        return pystray.Menu(
-            pystray.MenuItem("Показать окно", self._run(self._show_window)),
-            pystray.MenuItem("Скрыть окно", self._run(self._hide_window)),
-            pystray.MenuItem("Старт / Пауза", self._run(self._toggle_timer)),
-            pystray.MenuItem("Сброс", self._run(self._reset_timer)),
-            pystray.MenuItem("Выход", self._run(self._exit_app)),
-        )
+    def dispose(self) -> None:
+        """Освобождает Qt-объекты при полном завершении или в UI-тесте."""
+        self.icon.hide()
+        self.icon.deleteLater()
+        self.menu.deleteLater()
 
-    def _run(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Оборачивает callback, чтобы pystray вызывал единообразные команды."""
-        def wrapped(*_args) -> None:
-            callback()
+    def _activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._show_window()
 
-        return wrapped
-
-    def _create_icon_image(self) -> Image.Image:
-        """Создает простую иконку Pomodoro без внешнего файла."""
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((8, 10, 56, 58), fill=(220, 68, 55, 255), outline=(120, 30, 25, 255), width=3)
-        draw.rectangle((28, 4, 36, 14), fill=(60, 140, 70, 255))
-        draw.arc((18, 20, 46, 48), start=90, end=360, fill=(255, 255, 255, 230), width=4)
-        return image
+    @staticmethod
+    def _create_icon() -> QIcon:
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor("#0B5F59"), 3))
+        painter.setBrush(QColor("#5BC7B8"))
+        painter.drawEllipse(8, 10, 48, 48)
+        painter.setPen(QPen(QColor("#FFFFFF"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(18, 20, 28, 28, 90 * 16, 270 * 16)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#27754C"))
+        painter.drawRoundedRect(28, 4, 8, 12, 3, 3)
+        painter.end()
+        return QIcon(pixmap)

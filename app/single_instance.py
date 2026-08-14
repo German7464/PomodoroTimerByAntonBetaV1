@@ -107,7 +107,7 @@ class SingleInstanceLock:
 
 
 def show_native_message(message: str, *, error: bool = False) -> None:
-    """Показывает сообщение до создания Tk; вне Windows пишет в stderr."""
+    """Показывает сообщение до создания Qt GUI; вне Windows пишет в stderr."""
     if os.name != "nt":
         print(message, file=sys.stderr)
         return
