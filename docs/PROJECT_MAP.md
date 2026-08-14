@@ -1,136 +1,54 @@
-# Карта проекта PomodoroTimerByAnton
+# Карта проекта
 
 ## Назначение и запуск
 
-PomodoroTimerByAnton — локальное настольное приложение на Python/Tkinter для чередования работы, короткого и длинного отдыха. Оно показывает общий таймер в главном окне и плавающем виджете, отправляет Tkinter-уведомления, ведет статистику, поддерживает профили, системный трей и автозапуск Windows.
-
-Точка входа — `main.py`. Функция `main()` сначала получает системную блокировку из `app.single_instance`, затем отложенно импортирует и создает `app.ui.main_window.MainWindow`. `MainWindow.run()` запускает трей, секундный цикл `Tk.after()` и `mainloop()`.
-
-## Структура
-
-```text
-main.py                         ранняя блокировка и точка входа
-app/
-  models.py                     перечисления и dataclass-модели
-  timer_engine.py               независимая от Tkinter логика таймера
-  statistics.py                 статистика и statistics.json v2
-  notifications.py              окна завершения периода
-  storage.py                    загрузка/нормализация настроек JSON
-  theme.py                      палитры, общие ttk-стили и менеджер оформления
-  overrun_effects.py            чистая математика и один контроллер визуального эффекта
-  config.py                     пути, portable-режим и миграция данных
-  profiles.py                   профили настроек
-  widget_settings.py            пресеты и нормализация геометрий виджета
-  autostart.py                  автозапуск через HKCU Run
-  single_instance.py            именованный Windows mutex и раннее сообщение
-  ui/
-    main_window.py              композиция сервисов и обработчики действий
-    widget_window.py            плавающий виджет общего TimerEngine
-    overrun_surface.py          Canvas-отрисовка маячков и волны общего кадра
-    stats_view.py               статистика за сегодня/все время
-    settings_window.py          настройки и профили
-    toggle_switch.py            общий Canvas-переключатель двоичных настроек
-    theme_editor.py             редактор light/dark-копий пользовательской темы
-    help_window.py              встроенная пользовательская справка
-    tray.py                     pystray-меню и поток иконки
-tests/                          unittest-тесты ядра, данных и UI-контрактов
-docs/
-  PROJECT_MAP.md                эта карта
-  TIMER_STATE_MACHINE.md        состояния, переходы и точки записи
-  WIDGETS.md                    типы, размеры и хранение геометрии виджета
-  THEMING.md                    темы, смысловые цвета и их расширение
-  STARTUP.md                    порядок запуска и единственный экземпляр
-data/                           локальные пользовательские JSON
-PomodoroTimerByAnton.spec       конфигурация PyInstaller onedir
-requirements.txt                pystray, Pillow, PyInstaller
-README.md                       пользовательская документация
-CHANGELOG.md                    история изменений
-```
-
-## Основные связи
-
-`MainWindow` создает ровно один `TimerEngine` и один контроллер `WidgetWindow`. `MainWindow.set_widget_visibility()` синхронизирует переключатель `Отображать виджет`, существующее поле `settings.widget_enabled` и фактический `Toplevel`; крестик виджета возвращается в эту же функцию callback-ом. Сам `Toplevel` создается лениво и переиспользуется после `withdraw()`. Главное окно и семь переключаемых представлений читают из общего таймера `mode_name()` и `formatted_time()`, поэтому отдельного таймера и дополнительного цикла обновления в виджете нет. Детали находятся в `docs/WIDGETS.md`.
-
-`MainWindow` также владеет одним `ThemeManager`. Настройки оформления и быстрый переключатель `Тёмный режим` направляются в `MainWindow.apply_theme_selection()`. Логическое состояние переключателя адаптируется к существующему строковому `appearance_mode`: `false` — `light`, `true` — `dark`. Менеджер обновляет общие `ttk`-стили и открытые `Toplevel`, а `WidgetWindow` как слушатель меняет цвета существующей разметки без смены геометрии или состояния таймера. `CustomThemeEditor` работает с отдельным черновиком: предпросмотр меняет только менеджер, применение передаёт нормализованные light/dark-копии в `MainWindow`, отмена восстанавливает сохранённую тему. Архитектура палитр описана в `docs/THEMING.md`.
-
-`app/ui/toggle_switch.py` содержит единственный `ToggleSwitch` для всех двоичных настроек. Компонент наблюдает существующий `BooleanVar`, получает смысловые цвета от того же `ThemeManager`, а существующие handlers остаются владельцами применения и записи настроек. Короткий локальный `after()` заканчивается через 150 мс и отменяется при повторном действии или уничтожении компонента; он не связан с непрерывным `OverrunVisualController`.
-
-Единственный `OverrunVisualController` принадлежит `MainWindow`. Он получает признак `waiting_for_continue`, выбранный эффект и текущую `ThemePalette`, рассчитывает цвет, масштаб, маячки, рамку и волну в `app/overrun_effects.py` и одним callback применяет кадр к главной карточке и `WidgetWindow`. `app/ui/overrun_surface.py` только рисует уже готовый кадр. Предпросмотр использует тот же путь, но не меняет `TimerState`. Отдельные UI-компоненты анимацию не планируют.
-
-Обычный секундный поток:
-
-```text
-Tk.after → MainWindow._schedule_tick() → TimerEngine.tick()
-                                      ├→ UI + WidgetWindow.update()
-                                      └→ PeriodCompletion
-                                           ├→ StatisticsService.record_completed_period()
-                                           └→ NotificationService.notify_period_finished()
-```
-
-При автоматическом переходе `TimerEngine` сразу выбирает и запускает следующий режим. При ручном переходе он сохраняет завершенный режим, считает превышение и ожидает. Кнопка уведомления и кнопка главного окна вызывают один `MainWindow.continue_manual_transition()`: ядро атомарно забирает превышение и запускает следующий период, статистика записывает соответствующее поле, уведомление закрывается, обе части UI и статистика обновляются. Крестик уведомления закрывает только окно.
-
-До этой композиции `main.py` получает именованный mutex из `single_instance.py`; только владелец блокировки импортирует и создает `MainWindow`. Подробности находятся в `docs/STARTUP.md`.
-
-`config.py` выбирает каталог данных. `storage.py`, `profiles.py` и `statistics.py` отвечают за конкретные JSON. `SettingsView` возвращает новый `AppSettings` в `MainWindow.apply_settings()`, после чего настройки получают таймер, уведомления и виджет. В форме остаются общая цветовая тема, режим, тип и размер виджета, но видимость меняет только переключатель главного окна; профиль и сохранение формы сохраняют текущее значение `widget_enabled`.
-
-## Пользовательские данные и JSON
-
-При запуске из Python файлы находятся в `<корень>/data/`. В PyInstaller onedir-сборке — в `data/` рядом с exe. Если этот каталог недоступен для записи, используется `%USERPROFILE%\.pomodoro_timer_by_anton\`. При первом доступном portable-запуске старые JSON из fallback-каталога копируются, но не удаляются.
-
-- `settings.json` — объект без поля версии, соответствующий `AppSettings`. `storage.normalize_settings_data()` добавляет отсутствующие поля, проверяет длительности, формат времени, тему `theme_name`, режим `appearance_mode`, разделы `custom_theme` и `overrun_visual`, непрозрачность 5–100%, тип/размер виджета и семь геометрий в `widget_layouts`. Неизвестная тема безопасно становится `Comet`/`light`; пользовательские палитры восстанавливаются отдельно по каждому HEX-полю. Неизвестный эффект становится `Пульсация` с независимым изменением цвета; прежние четыре значения эффектов мигрируют без потери их смысла. Неверные переопределения цветов начинают следовать теме. Старые `widget_x`/`widget_y` мигрируют в компактный вид. Прежние поля цветов виджета сохраняются для обратной совместимости, но отображение берет цвета из темы.
-- `profiles.json` — список объектов `TimerProfile`. `ProfilesService` отбрасывает элементы без имени, нормализует значения и гарантирует стандартный профиль.
-- `statistics.json` — объект версии 2:
-
-```json
-{
-  "version": 2,
-  "days": {
-    "YYYY-MM-DD": {
-      "work_seconds": 0,
-      "rest_seconds": 0,
-      "overwork_seconds": 0,
-      "short_break_overrun_seconds": 0,
-      "long_break_overrun_seconds": 0,
-      "completed_work_periods": 0,
-      "completed_short_breaks": 0,
-      "completed_long_breaks": 0,
-      "skipped_periods": 0,
-      "timer_resets": 0,
-      "completed_pomodoro_cycles": 0
-    }
-  },
-  "all_time": { "...": 0 }
-}
-```
-
-Версия 1 мигрирует автоматически: существующие известные и неизвестные поля сохраняются, три новых счетчика получают `0`, версия становится 2. Частично заполненные блоки дополняются; отрицательные и нечисловые известные значения заменяются безопасными. Нечитаемый JSON или JSON со структурно неверными блоками копируется в соседний `statistics.json.corrupt[.N].bak`, затем создается рабочая структура. Запись выполняется через временный файл и замену. Превышение не сохраняется каждый тик — только при «Продолжить» или штатном полном выходе.
-
-Файлы `data/settings.json`, `data/profiles.json`, `data/statistics.json` являются пользовательскими и перечислены в корневом `.gitignore`.
-
-## Зависимости и команды
-
-Проверенная версия в текущем окружении: Python 3.14.7 с Tcl/Tk 9.0. Tkinter и `winreg` входят в Windows Python. Внешние зависимости: `pystray`, `Pillow`, `PyInstaller>=6.22,<7`. Минимум PyInstaller 6.22 нужен для сборки Tcl/Tk 9 со встроенным архивом данных (`//zipfs:/...`); версия 6.20 создает exe без Tkinter и не подходит.
+PomodoroTimerByAnton — portable Windows-приложение Pomodoro на Python 3.14 и PySide6 Qt Widgets. Точка входа `main.py` получает mutex до загрузки GUI, затем создаёт `app.ui.main_window.MainWindow`.
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python main.py
 python -m unittest discover -s tests -v
-python -m compileall -q main.py app tests
 python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 ```
 
-Сборка в README также показана эквивалентной командой `--onedir --windowed`. Перед выпуском предпочтительно использовать отслеживаемый `.spec`.
+Для headless UI-тестов задаётся `QT_QPA_PLATFORM=offscreen`. Подробности UI: `UI_ARCHITECTURE.md`; решение стека: `UI_TECH_DECISION.md`; parity: `UI_FEATURE_PARITY.md`.
 
-## Автоматически созданное и ограничения
+## Структура
 
-`.venv/`, `.idea/`, `build/`, `dist/`, `__pycache__/`, `*.pyc` и `.pytest_cache/` не являются исходным кодом и игнорируются для новых изменений. В старом базовом коммите часть этих файлов уже отслеживалась; не удаляйте и не переписывайте историю без отдельного решения владельца.
+- `main.py` — ранняя блокировка и отложенный импорт GUI.
+- `app/timer_engine.py`, `models.py` — независимая машина состояния и модели.
+- `app/statistics.py`, `storage.py`, `profiles.py` — миграция/сохранение пользовательских данных.
+- `app/overrun_effects.py` — чистая математика кадров и единый контроллер.
+- `app/theme.py` — смысловые палитры и Qt ThemeManager.
+- `app/notifications.py`, `single_instance.py`, `autostart.py` — уведомления, mutex, HKCU Run.
+- `app/ui/` — Qt-окна, дизайн-система, компоненты и семь видов виджета.
+- `assets/icons/` — проектные SVG и лицензия.
+- `tests/` — unittest, включая PySide6 QtTest/offscreen.
+- `docs/` — постоянная архитектурная документация.
+- `PomodoroTimerByAnton.spec` — onedir-сборка PyInstaller.
 
-Известные ограничения:
+`build/`, `dist/`, `.venv/`, `.idea/`, `__pycache__/`, `.pytest_cache/` создаются автоматически и не являются исходным кодом. `data/*.json` — пользовательские данные и не включаются в Git или сборку.
 
-- трей и автозапуск ориентированы на Windows; автозапуск включается только в exe;
-- единственный экземпляр реализован Windows mutex; на неподдерживаемой ОС запуск завершается явной ошибкой;
-- точность тиков зависит от событийного цикла Tkinter и не компенсирует сон/долгую блокировку процесса монотонными часами;
-- превышение хранится в памяти до «Продолжить» или штатного полного выхода; аварийное завершение процесса может потерять незаписанную часть;
-- превышение целиком относится к дню, в который оно сохранено, даже если ожидание пересекло полночь;
-- основной набор UI-контрактов не создает Tk root; настоящий трей, системные заголовки и DPI 100/125/150 требуют отдельной ручной проверки.
-- плавность эффекта зависит от загрузки общего цикла Tkinter; контроллер ограничен примерно 12,5 кадрами/с и не меняет отсчёт таймера.
+## Связи
+
+`MainWindow` владеет единственным `TimerEngine`. Секундный `QTimer` вызывает `tick()`, затем события завершения передаются `StatisticsService` и `NotificationService`. Главное `TimerVisual` и активный `WidgetView` читают то же состояние. `WidgetActions` направляет команды виджета обратно в методы главного окна. `ThemeManager` и `OverrunVisualController` рассылают палитру и единый кадр, не меняя ядро.
+
+## Пользовательские JSON
+
+В Python-режиме каталог — `data/` в проекте. В onedir exe каталог `data/` создаётся рядом с exe; если это невозможно, используется `%USERPROFILE%/.pomodoro_timer_by_anton` с предупреждением. Старые данные копируются безопасно и не удаляются.
+
+`settings.json` соответствует полям `AppSettings`: длительности, уведомления, профили, `theme_name`, `appearance_mode`, две custom-палитры, `overrun_visual`, `widget_enabled`, тип/размер/opacity и `widget_layouts` для семи типов. Отсутствующие/неверные известные поля нормализуются; старые координаты мигрируют в компактный вид.
+
+`profiles.json` хранит именованные срезы настроек. `statistics.json` имеет `version: 2`, блоки `all_time` и `daily`, обычные метрики и три независимых счётчика превышения. Версия 1 дополняется нулями без повторного учёта периодов; структурное повреждение резервируется как `.corrupt*.bak`. Превышение записывается только при «Продолжить» или полном выходе.
+
+## Зависимости и лицензии
+
+Runtime: `PySide6-Essentials==6.11.1`/`shiboken6`, LGPL-3.0 option, динамическая onedir-компоновка. Build: `PyInstaller==6.22.0`, bootloader exception. SVG проекта — CC0-1.0. См. `requirements*.txt`, `THIRD_PARTY_NOTICES.md` и `assets/icons/LICENSE.md`.
+
+## Ограничения
+
+- mutex, автозапуск и целевая сборка ориентированы на Windows 10/11;
+- системный title bar остаётся нативным для надёжного DPI, resize и доступности;
+- секундный тик не компенсирует глубокий сон системы;
+- Qt offscreen не подтверждает ClearType, реальный multi-monitor DPI, tray shell и GPU; это ручная релизная матрица;
+- very-low widget opacity намеренно может снижать контраст; главный переключатель остаётся способом вернуть окно.
