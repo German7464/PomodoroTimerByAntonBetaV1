@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Сборка автономного Windows onedir. GPL-2.0-or-later с исключением для сборки приложений.
+PyInstaller==6.22.0
