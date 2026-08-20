@@ -7,6 +7,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets/icons/*', 'assets/icons'),
+        ('assets/translations/*.qm', 'assets/translations'),
+        ('assets/translations/*.ts', 'assets/translations'),
         ('THIRD_PARTY_NOTICES.md', '.'),
     ],
     hiddenimports=[],

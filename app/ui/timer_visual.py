@@ -7,16 +7,10 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from app.models import TimerMode
+from app.i18n import localization_manager, timer_mode_text
 from app.overrun_effects import INACTIVE_FRAME, OverrunVisualFrame
 from app.theme import ThemeManager, ThemePalette, mode_color
 from app.ui.design_system import TOKENS
-
-
-PREVIEW_NAMES = {
-    TimerMode.WORK: "Переработка",
-    TimerMode.SHORT_BREAK: "Короткий отдых сверх нормы",
-    TimerMode.LONG_BREAK: "Длинный отдых сверх нормы",
-}
 
 
 class TimerVisual(QWidget):
@@ -52,7 +46,7 @@ class TimerVisual(QWidget):
         )
         self.content_layout.setSpacing(TOKENS.spacing.xs)
         self.content_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mode_label = QLabel("Работа", self)
+        self.mode_label = QLabel(timer_mode_text(TimerMode.WORK), self)
         self.mode_label.setProperty("role", "mode")
         self.mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mode_label.setWordWrap(True)
@@ -60,6 +54,7 @@ class TimerVisual(QWidget):
         self.content_layout.addWidget(self.mode_label)
         self.time_label = QLabel("00:25:00", self)
         self.time_label.setProperty("role", "timer")
+        self.time_label.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._reserve_timer_height()
         self.content_layout.addWidget(self.time_label, 1)
@@ -70,6 +65,7 @@ class TimerVisual(QWidget):
         self.status_label.hide()
         self.content_layout.addWidget(self.status_label)
         theme_manager.register(self._apply_theme)
+        localization_manager().language_changed.connect(self._retranslate_ui)
         self._apply_fonts(1.0)
 
     @property
@@ -104,7 +100,7 @@ class TimerVisual(QWidget):
     def apply_overrun_frame(self, frame: OverrunVisualFrame, *, short_format: bool = False) -> None:
         self._frame = frame
         if frame.preview and frame.mode is not None:
-            self.mode_label.setText(PREVIEW_NAMES[frame.mode])
+            self.mode_label.setText(timer_mode_text(frame.mode, True))
             self.time_label.setText("+00:03" if short_format else "+00:00:03")
             self._mode = frame.mode
             self._waiting = True
@@ -177,6 +173,11 @@ class TimerVisual(QWidget):
         self._palette = palette
         self._refresh_colors()
         self.update()
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        if self._frame.preview and self._frame.mode is not None:
+            self.mode_label.setText(timer_mode_text(self._frame.mode, True))
+        self.updateGeometry()
 
     def _refresh_colors(self) -> None:
         p = self._palette

@@ -1,17 +1,70 @@
 {
   "version": 2,
-  "days": {},
+  "days": {
+    "2026-08-14": {
+      "work_seconds": 3000,
+      "rest_seconds": 0,
+      "overwork_seconds": 5803,
+      "short_break_overrun_seconds": 0,
+      "long_break_overrun_seconds": 0,
+      "completed_work_periods": 2,
+      "completed_short_breaks": 0,
+      "completed_long_breaks": 0,
+      "skipped_periods": 1,
+      "timer_resets": 1,
+      "completed_pomodoro_cycles": 0
+    },
+    "2026-08-17": {
+      "work_seconds": 9000,
+      "rest_seconds": 2100,
+      "overwork_seconds": 11254,
+      "short_break_overrun_seconds": 2196,
+      "long_break_overrun_seconds": 1,
+      "completed_work_periods": 6,
+      "completed_short_breaks": 4,
+      "completed_long_breaks": 1,
+      "skipped_periods": 0,
+      "timer_resets": 3,
+      "completed_pomodoro_cycles": 1
+    },
+    "2026-08-18": {
+      "work_seconds": 4500,
+      "rest_seconds": 900,
+      "overwork_seconds": 18286,
+      "short_break_overrun_seconds": 1668,
+      "long_break_overrun_seconds": 0,
+      "completed_work_periods": 3,
+      "completed_short_breaks": 3,
+      "completed_long_breaks": 0,
+      "skipped_periods": 0,
+      "timer_resets": 1,
+      "completed_pomodoro_cycles": 0
+    },
+    "2026-08-20": {
+      "work_seconds": 1500,
+      "rest_seconds": 0,
+      "overwork_seconds": 1187,
+      "short_break_overrun_seconds": 0,
+      "long_break_overrun_seconds": 0,
+      "completed_work_periods": 1,
+      "completed_short_breaks": 0,
+      "completed_long_breaks": 0,
+      "skipped_periods": 0,
+      "timer_resets": 1,
+      "completed_pomodoro_cycles": 0
+    }
+  },
   "all_time": {
-    "work_seconds": 0,
-    "rest_seconds": 0,
-    "overwork_seconds": 0,
-    "short_break_overrun_seconds": 0,
-    "long_break_overrun_seconds": 0,
-    "completed_work_periods": 0,
-    "completed_short_breaks": 0,
-    "completed_long_breaks": 0,
-    "skipped_periods": 0,
-    "timer_resets": 0,
-    "completed_pomodoro_cycles": 0
+    "work_seconds": 18000,
+    "rest_seconds": 3000,
+    "overwork_seconds": 36530,
+    "short_break_overrun_seconds": 3864,
+    "long_break_overrun_seconds": 1,
+    "completed_work_periods": 12,
+    "completed_short_breaks": 7,
+    "completed_long_breaks": 1,
+    "skipped_periods": 1,
+    "timer_resets": 6,
+    "completed_pomodoro_cycles": 1
   }
 }

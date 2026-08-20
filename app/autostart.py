@@ -43,10 +43,7 @@ class AutostartService:
     def enable(self) -> None:
         """Writes the current exe path to HKCU Run."""
         if not is_frozen_app():
-            raise RuntimeError(
-                "Автозапуск доступен только для собранной exe-версии. "
-                "При запуске из Python включение автозапуска не выполняется.",
-            )
+            raise RuntimeError("error.autostart.python_unavailable")
 
         # HKCU is enough for per-user startup and does not require admin rights.
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH) as key:

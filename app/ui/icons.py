@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QTransform
 from PySide6.QtSvg import QSvgRenderer
 
 
@@ -22,7 +22,7 @@ def _svg_source(name: str) -> str:
 
 
 @lru_cache(maxsize=128)
-def themed_icon(name: str, color: str, size: int = 20) -> QIcon:
+def themed_icon(name: str, color: str, size: int = 20, mirrored: bool = False) -> QIcon:
     """Возвращает SVG как чёткую QIcon нужного смыслового цвета."""
     source = _svg_source(name)
     if not source:
@@ -38,6 +38,8 @@ def themed_icon(name: str, color: str, size: int = 20) -> QIcon:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         renderer.render(painter)
         painter.end()
+        if mirrored:
+            pixmap = pixmap.transformed(QTransform().scale(-1, 1))
         pixmap.setDevicePixelRatio(scale)
         icon.addPixmap(pixmap)
     return icon

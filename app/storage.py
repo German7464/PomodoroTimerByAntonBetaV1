@@ -16,6 +16,7 @@ from app.config import (
     DEFAULT_WORK_MINUTES,
 )
 from app.models import AppSettings, TimeDisplayFormat
+from app.i18n import DEFAULT_LANGUAGE, normalize_language_code, system_language_code
 from app.overrun_effects import default_overrun_visual, normalize_overrun_visual
 from app.theme import (
     DEFAULT_APPEARANCE_MODE,
@@ -57,7 +58,19 @@ def save_json(path: Path, data: Any) -> None:
         json.dump(data, file, ensure_ascii=False, indent=2)
 
 
-def default_settings_data() -> dict[str, Any]:
+_DEFAULT_MESSAGE_KEYS = {
+    "work_end_message": "notification.default.work_end",
+    "short_break_end_message": "notification.default.short_break_end",
+    "long_break_end_message": "notification.default.long_break_end",
+}
+_LEGACY_DEFAULT_MESSAGES = {
+    "Рабочий период завершен. Время отдохнуть.": "notification.default.work_end",
+    "Короткий отдых завершен. Пора вернуться к работе.": "notification.default.short_break_end",
+    "Длинный отдых завершен. Пора начать новый рабочий период.": "notification.default.long_break_end",
+}
+
+
+def default_settings_data(ui_language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
     """Возвращает настройки по умолчанию в формате для JSON."""
     return {
         "active_profile": DEFAULT_PROFILE_NAME,
@@ -66,9 +79,9 @@ def default_settings_data() -> dict[str, Any]:
         "long_break_minutes": DEFAULT_LONG_BREAK_MINUTES,
         "notifications_enabled": True,
         "notification_sound_enabled": True,
-        "work_end_message": "Рабочий период завершен. Время отдохнуть.",
-        "short_break_end_message": "Короткий отдых завершен. Пора вернуться к работе.",
-        "long_break_end_message": "Длинный отдых завершен. Пора начать новый рабочий период.",
+        "work_end_message": _DEFAULT_MESSAGE_KEYS["work_end_message"],
+        "short_break_end_message": _DEFAULT_MESSAGE_KEYS["short_break_end_message"],
+        "long_break_end_message": _DEFAULT_MESSAGE_KEYS["long_break_end_message"],
         "autostart_enabled": False,
         "use_long_break": DEFAULT_USE_LONG_BREAK,
         "long_break_interval": DEFAULT_CYCLES_BEFORE_LONG_BREAK,
@@ -91,6 +104,7 @@ def default_settings_data() -> dict[str, Any]:
         "widget_x": 100,
         "widget_y": 100,
         "main_window_geometry": {},
+        "ui_language": normalize_language_code(ui_language),
     }
 
 
@@ -101,6 +115,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
         return defaults
 
     settings = defaults | raw_data
+    if settings.get("active_profile") == "Стандартный":
+        settings["active_profile"] = DEFAULT_PROFILE_NAME
+    settings["ui_language"] = normalize_language_code(settings.get("ui_language"))
     settings["use_long_break"] = bool(settings["use_long_break"])
     settings["notifications_enabled"] = bool(settings["notifications_enabled"])
     settings["notification_sound_enabled"] = bool(settings["notification_sound_enabled"])
@@ -139,13 +156,9 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
     settings["widget_background_color"] = _safe_color(settings["widget_background_color"], "#202124")
     settings["widget_text_color"] = _safe_color(settings["widget_text_color"], "#ffffff")
 
-    for key, default_value in (
-        ("work_end_message", "Рабочий период завершен. Время отдохнуть."),
-        ("short_break_end_message", "Короткий отдых завершен. Пора вернуться к работе."),
-        ("long_break_end_message", "Длинный отдых завершен. Пора начать новый рабочий период."),
-    ):
+    for key, default_value in _DEFAULT_MESSAGE_KEYS.items():
         message = str(settings.get(key, "")).strip()
-        settings[key] = message or default_value
+        settings[key] = _LEGACY_DEFAULT_MESSAGES.get(message, message or default_value)
 
     settings["widget_opacity"] = normalize_widget_opacity(
         settings.get("widget_opacity"),
@@ -183,8 +196,11 @@ def normalize_settings_data(raw_data: Any) -> dict[str, Any]:
 def load_app_settings(path: Path) -> AppSettings:
     """Загружает настройки приложения и мягко мигрирует старый формат."""
     path_existed = path.exists()
-    raw_data = load_json(path, default_settings_data())
+    initial_language = DEFAULT_LANGUAGE if path_existed else system_language_code()
+    raw_data = load_json(path, default_settings_data(initial_language))
     settings_data = normalize_settings_data(raw_data)
+    if not path_existed:
+        settings_data["ui_language"] = initial_language
     if not path_existed or raw_data != settings_data:
         save_json(path, settings_data)
     known_settings = {
@@ -201,6 +217,7 @@ def save_app_settings(path: Path, settings: AppSettings) -> None:
     settings.appearance_mode = normalize_appearance_mode(settings.appearance_mode)
     settings.custom_theme = normalize_custom_theme(settings.custom_theme)
     settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
+    settings.ui_language = normalize_language_code(settings.ui_language)
     settings.widget_type = normalize_widget_type(settings.widget_type)
     settings.widget_opacity = normalize_widget_opacity(settings.widget_opacity)
     settings.widget_layouts = normalize_widget_layouts(

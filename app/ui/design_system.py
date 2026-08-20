@@ -144,7 +144,7 @@ def build_stylesheet() -> str:
     t = TOKENS
     return f"""
     * {{
-        font-family: "{t.typography.family}", "{t.typography.fallback}";
+        font-family: "{t.typography.family}", "{t.typography.fallback}", "Microsoft YaHei UI", "Nirmala UI", "Yu Gothic UI", "Meiryo UI", "Malgun Gothic", "Arial";
         outline: none;
     }}
     QMainWindow, QDialog, QWidget#AppRoot {{

@@ -1,6 +1,6 @@
 [
   {
-    "name": "Стандартный",
+    "name": "__default__",
     "work_minutes": 25,
     "short_break_minutes": 5,
     "long_break_minutes": 15,
@@ -10,9 +10,9 @@
     "time_display_format": "HH:MM:SS",
     "notifications_enabled": true,
     "notification_sound_enabled": true,
-    "work_end_message": "Рабочий период завершен. Время отдохнуть.",
-    "short_break_end_message": "Короткий отдых завершен. Пора вернуться к работе.",
-    "long_break_end_message": "Длинный отдых завершен. Пора начать новый рабочий период.",
+    "work_end_message": "notification.default.work_end",
+    "short_break_end_message": "notification.default.short_break_end",
+    "long_break_end_message": "notification.default.long_break_end",
     "autostart_enabled": false,
     "minimize_to_tray_on_start": false,
     "close_to_tray": true,
@@ -69,11 +69,11 @@
       }
     },
     "overrun_visual": {
-      "effect": "Пульсация",
+      "effect": "pulse",
       "color_enabled": true,
-      "scope": "Цифры и карточка",
-      "speed": "Обычно",
-      "intensity": "Средне",
+      "scope": "both",
+      "speed": "normal",
+      "intensity": "medium",
       "animations_enabled": true,
       "opaque_widget_during_overrun": false,
       "colors": {
@@ -83,53 +83,53 @@
       }
     },
     "widget_enabled": false,
-    "widget_type": "Компактный",
-    "widget_size": "Маленький",
+    "widget_type": "compact",
+    "widget_size": "small",
     "widget_layouts": {
-      "Минималистичный": {
-        "size": "Маленький",
+      "minimal": {
+        "size": "small",
         "width": 200,
         "height": 110,
         "x": 100,
         "y": 100
       },
-      "Компактный": {
-        "size": "Маленький",
+      "compact": {
+        "size": "small",
         "width": 240,
         "height": 145,
         "x": 100,
         "y": 100
       },
-      "Расширенный": {
-        "size": "Маленький",
+      "expanded": {
+        "size": "small",
         "width": 400,
         "height": 245,
         "x": 100,
         "y": 100
       },
-      "Микро": {
-        "size": "Маленький",
+      "micro": {
+        "size": "small",
         "width": 170,
         "height": 96,
         "x": 100,
         "y": 100
       },
-      "Строка": {
-        "size": "Маленький",
+      "row": {
+        "size": "small",
         "width": 360,
         "height": 100,
         "x": 100,
         "y": 100
       },
-      "Кольцо": {
-        "size": "Маленький",
+      "ring": {
+        "size": "small",
         "width": 220,
         "height": 250,
         "x": 100,
         "y": 100
       },
-      "Табло": {
-        "size": "Маленький",
+      "scoreboard": {
+        "size": "small",
         "width": 300,
         "height": 145,
         "x": 100,

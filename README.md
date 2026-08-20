@@ -13,6 +13,7 @@
 - Семь макетов виджета с независимыми размерами/координатами и alpha 5–100%.
 - Единые доступные toggle switch для всех двоичных настроек.
 - Qt-уведомление, `QSystemTrayIcon`, автозапуск HKCU и Windows mutex одного экземпляра.
+- Интерфейс на 11 языках с мгновенным переключением, plural-формами Qt и RTL для арабского.
 - Безопасная миграция существующих `settings.json`, `profiles.json`, `statistics.json`.
 
 ## Интерфейс
@@ -75,10 +76,11 @@ Runtime-зависимость: `PySide6-Essentials==6.11.1` (QtCore/Gui/Widgets
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
 python -m compileall -q app tests main.py
+python tools/build_translations.py --check-only
 python -m unittest discover -s tests -v
 ```
 
-Тесты используют стандартный `unittest` и `PySide6.QtTest`, не открывая рабочий интерфейс. Они проверяют ядро, статистику/миграции, mutex, темы, toggle, общий кадр эффектов, семь видов, видимость и прозрачность. Реальные DPI, ClearType, системный трей и несколько мониторов остаются частью ручной release-QA.
+Тесты используют стандартный `unittest` и `PySide6.QtTest`, не открывая рабочий интерфейс. Они проверяют ядро, статистику/миграции, mutex, темы, локализацию, toggle, общий кадр эффектов, семь видов, видимость и прозрачность. Реальные DPI, ClearType, системный трей и несколько мониторов остаются частью ручной release-QA.
 
 ## Сборка Windows
 
@@ -88,7 +90,7 @@ python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 .\dist\PomodoroTimerByAnton\PomodoroTimerByAnton.exe
 ```
 
-Используется надёжная onedir-сборка с динамическими Qt DLL. Переносить нужно всю папку `PomodoroTimerByAnton`, а не только exe. Spec включает полный набор SVG/PNG/ICO и notices, назначает многослойный `app.ico` файлу EXE и не добавляет тесты или пользовательские JSON. Фактический состав пакетов проверяется после чистой сборки.
+Используется надёжная onedir-сборка с динамическими Qt DLL. Переносить нужно всю папку `PomodoroTimerByAnton`, а не только exe. Spec включает полный набор SVG/PNG/ICO, `.ts`/`.qm`, штатные переводы Qt и notices, назначает многослойный `app.ico` файлу EXE и не добавляет тесты или пользовательские JSON. Фактический состав пакетов проверяется после чистой сборки.
 
 Оригинальный знак — оранжевый минималистичный помидор с дугой таймера. `app.svg` является источником PNG 16/20/24/32/48/64/128/256 и восьмислойного ICO; `tray.svg` упрощён для 16 px. Один AppUserModelID и одна иконка назначаются приложению, окнам, панели задач, диалогам, виджету, трею и EXE.
 
@@ -108,4 +110,5 @@ python -m PyInstaller --noconfirm --clean PomodoroTimerByAnton.spec
 - `docs/UI_TECH_DECISION.md` — сравнение UI-стеков и выбор Qt Widgets.
 - `docs/UI_ARCHITECTURE.md` — дизайн-система и поток состояния.
 - `docs/UI_FEATURE_PARITY.md` — соответствие прежних и новых функций.
+- `docs/LOCALIZATION.md` — каталоги, переключение языка, RTL и контроль полноты.
 - `docs/TIMER_STATE_MACHINE.md`, `docs/THEMING.md`, `docs/WIDGETS.md`, `docs/STARTUP.md` — профильные контракты.

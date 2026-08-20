@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.theme import ThemeManager, ThemePalette
+from app.i18n import localization_manager, tr
 from app.ui.design_system import TOKENS, apply_card_shadow
 from app.ui.icons import themed_icon
 
@@ -249,6 +250,7 @@ class AppButton(QPushButton):
         self.released.connect(self._animate_press_out)
         if theme_manager is not None:
             theme_manager.register(self._apply_theme)
+            localization_manager().language_changed.connect(self._language_changed)
 
     def _apply_theme(self, palette: ThemePalette) -> None:
         if self._icon_name is None:
@@ -257,8 +259,23 @@ class AppButton(QPushButton):
         color = palette.on_accent if variant == "primary" else (
             palette.error if variant == "danger" else palette.text_primary
         )
-        self.setIcon(themed_icon(self._icon_name, color, 20))
+        self.setIcon(
+            themed_icon(
+                self._icon_name,
+                color,
+                20,
+                mirrored=(
+                    self._icon_name == "skip"
+                    and self.layoutDirection() == Qt.LayoutDirection.RightToLeft
+                ),
+            )
+        )
         self.setIconSize(QSize(20, 20))
+
+    def _language_changed(self, _language_code: str) -> None:
+        if self._theme_manager is not None:
+            self._apply_theme(self._theme_manager.palette)
+        self.updateGeometry()
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         base = super().sizeHint()
@@ -284,13 +301,20 @@ class AppButton(QPushButton):
         )
         return metrics.horizontalAdvance(str(text)) + chrome_width
 
+    def set_reserved_texts(self, values: tuple[str, ...]) -> None:
+        self._reserved_texts = tuple(str(value) for value in values)
+        self.updateGeometry()
+
     def activate_from_keyboard(self) -> bool:
         """Визуально нажимает кнопку и запускает тот же clicked-handler, что мышь."""
         if not self.isEnabled() or not self.isVisible():
             return False
         self._set_keyboard_focus(True)
         self.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        self.animateClick()
+        # Use the same synchronous command path as mouse release. Qt's binding
+        # exposes no animateClick duration and its default timeout varies under
+        # a busy event loop; the pressed/released signals still drive feedback.
+        self.click()
         return True
 
     def _motion_enabled(self) -> bool:
@@ -427,15 +451,16 @@ class ToggleSwitch(QAbstractButton):
         *,
         theme_manager: ThemeManager,
         animations_enabled: Callable[[], bool] | None = None,
-        accessible_name: str = "Переключатель",
+        accessible_name: str = "toggle.accessible_name",
     ) -> None:
         super().__init__(parent)
         self.setCheckable(True)
         self.setChecked(bool(checked))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setAccessibleName(accessible_name)
-        self.setAccessibleDescription("ВКЛ — включено, ВЫКЛ — выключено")
+        self._accessible_name_key = accessible_name
+        self.setAccessibleName(tr(accessible_name))
+        self.setAccessibleDescription(tr("toggle.accessible_description"))
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._theme_manager = theme_manager
         self._palette = theme_manager.palette
@@ -448,9 +473,10 @@ class ToggleSwitch(QAbstractButton):
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.clicked.connect(self._handle_clicked)
         theme_manager.register(self._apply_theme)
+        localization_manager().language_changed.connect(self._retranslate_ui)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
-        return QSize(112, TOKENS.controls.toggle_height)
+        return QSize(self._status_width() + 72, TOKENS.controls.toggle_height)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return self.sizeHint()
@@ -461,7 +487,7 @@ class ToggleSwitch(QAbstractButton):
 
     @property
     def state_text(self) -> str:
-        return "ВКЛ" if self.isChecked() else "ВЫКЛ"
+        return tr("toggle.on" if self.isChecked() else "toggle.off")
 
     @property
     def thumb_fraction(self) -> float:
@@ -493,17 +519,13 @@ class ToggleSwitch(QAbstractButton):
             QAbstractButton.setChecked(self, normalized)
             self.blockSignals(False)
         self._move_thumb(normalized, animate=animate)
-        self.setAccessibleDescription(
-            f"{'ВКЛ, включено' if normalized else 'ВЫКЛ, выключено'}"
-        )
+        self._refresh_accessibility(normalized)
         if changed and emit:
             self.valueChanged.emit(normalized)
 
     def _handle_clicked(self, checked: bool) -> None:
         self._move_thumb(checked, animate=True)
-        self.setAccessibleDescription(
-            f"{'ВКЛ, включено' if checked else 'ВЫКЛ, выключено'}"
-        )
+        self._refresh_accessibility(checked)
         self.valueChanged.emit(bool(checked))
 
     def _move_thumb(self, checked: bool, *, animate: bool) -> None:
@@ -524,8 +546,10 @@ class ToggleSwitch(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p = self._palette
-        status_width = 42.0
-        track = QRectF(status_width + 4, 2, 64, 28)
+        status_width = float(self._status_width())
+        rtl = self.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        track = QRectF(2 if rtl else status_width + 4, 2, 64, 28)
+        status_rect = QRectF(70 if rtl else 0, 0, status_width, self.height())
         track_color = p.accent if self.isChecked() else p.secondary_background
         if not self.isEnabled():
             track_color = p.disabled
@@ -538,17 +562,32 @@ class ToggleSwitch(QAbstractButton):
         thumb_size = 22.0
         start_x = track.left() + 3
         end_x = track.right() - thumb_size - 3
+        if rtl:
+            start_x, end_x = end_x, start_x
         thumb_x = start_x + (end_x - start_x) * self._position
         thumb = QRectF(thumb_x, track.top() + 3, thumb_size, thumb_size)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(p.on_accent if self.isChecked() else p.card_background))
         painter.drawEllipse(thumb)
 
-        font = QFont("Segoe UI Variable Text", 9)
+        font = QFont(TOKENS.typography.family, 9)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         painter.setPen(QColor(p.disabled if not self.isEnabled() else p.text_secondary))
-        painter.drawText(QRectF(0, 0, status_width, self.height()), Qt.AlignmentFlag.AlignCenter, self.state_text)
+        painter.drawText(status_rect, Qt.AlignmentFlag.AlignCenter, self.state_text)
+
+    def _status_width(self) -> int:
+        metrics = QFontMetrics(QFont(TOKENS.typography.family, 9))
+        return max(42, metrics.horizontalAdvance(tr("toggle.on")) + 10, metrics.horizontalAdvance(tr("toggle.off")) + 10)
+
+    def _refresh_accessibility(self, checked: bool) -> None:
+        self.setAccessibleName(tr(self._accessible_name_key))
+        self.setAccessibleDescription(tr("toggle.state.on" if checked else "toggle.state.off"))
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        self._refresh_accessibility(self.isChecked())
+        self.updateGeometry()
+        self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._hovered = True
@@ -614,15 +653,19 @@ class SwitchRow(QWidget):
         layout.setSpacing(TOKENS.spacing.md)
         text_box = QVBoxLayout()
         text_box.setSpacing(TOKENS.spacing.xxs)
-        self.label = ClickableLabel(text, self)
+        self._text_key = text
+        self._description_key = description
+        self.label = ClickableLabel(tr(text), self)
         self.label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.label.setWordWrap(True)
         text_box.addWidget(self.label)
+        self.caption: QLabel | None = None
         if description:
-            caption = QLabel(description, self)
+            caption = QLabel(tr(description), self)
             caption.setProperty("role", "caption")
             caption.setWordWrap(True)
             text_box.addWidget(caption)
+            self.caption = caption
         layout.addLayout(text_box, 1)
         self.switch = ToggleSwitch(
             checked,
@@ -634,6 +677,15 @@ class SwitchRow(QWidget):
         layout.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignVCenter)
         self.label.clicked.connect(self.switch.click)
         self.switch.valueChanged.connect(self.valueChanged)
+        localization_manager().language_changed.connect(self._retranslate_ui)
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        self.label.setText(tr(self._text_key))
+        if self.caption is not None:
+            self.caption.setText(tr(self._description_key))
+        self.switch._accessible_name_key = self._text_key
+        self.switch._refresh_accessibility(self.switch.isChecked())
+        self.updateGeometry()
 
     def isChecked(self) -> bool:  # noqa: N802 - Qt API convention
         return self.switch.isChecked()
@@ -657,6 +709,8 @@ class PageHeader(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._title_key = title
+        self._subtitle_key = subtitle
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(TOKENS.spacing.md)
@@ -665,10 +719,10 @@ class PageHeader(QWidget):
         text_layout = QVBoxLayout(self._text_container)
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(TOKENS.spacing.xxs)
-        self.title_label = QLabel(title, self._text_container)
+        self.title_label = QLabel(tr(title), self._text_container)
         self.title_label.setProperty("role", "pageTitle")
         text_layout.addWidget(self.title_label)
-        self.subtitle_label = QLabel(subtitle, self._text_container)
+        self.subtitle_label = QLabel(tr(subtitle) if subtitle else "", self._text_container)
         self.subtitle_label.setProperty("role", "subtitle")
         self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setVisible(bool(subtitle))
@@ -681,6 +735,13 @@ class PageHeader(QWidget):
         self.actions.setSpacing(TOKENS.spacing.xs)
         self._grid.addWidget(self.actions_container, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self._compact = False
+        localization_manager().language_changed.connect(self._retranslate_ui)
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        self.title_label.setText(tr(self._title_key))
+        self.subtitle_label.setText(tr(self._subtitle_key) if self._subtitle_key else "")
+        self.subtitle_label.setVisible(bool(self._subtitle_key))
+        self.updateGeometry()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         compact = event.size().width() < 720
@@ -699,13 +760,19 @@ class MetricCard(Card):
 
     def __init__(self, title: str, value: str = "0", parent: QWidget | None = None) -> None:
         super().__init__(parent, padding=TOKENS.spacing.md)
-        self.title_label = QLabel(title, self)
+        self._title_key = title
+        self.title_label = QLabel(tr(title), self)
         self.title_label.setProperty("role", "caption")
         self.title_label.setWordWrap(True)
         self.value_label = QLabel(value, self)
         self.value_label.setProperty("role", "metric")
         self.content_layout.addWidget(self.title_label)
         self.content_layout.addWidget(self.value_label)
+        localization_manager().language_changed.connect(self._retranslate_ui)
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        self.title_label.setText(tr(self._title_key))
+        self.updateGeometry()
 
 
 class ColorSwatch(QAbstractButton):

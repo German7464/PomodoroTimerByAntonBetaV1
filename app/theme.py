@@ -17,13 +17,19 @@ DEFAULT_THEME_NAME: Final = "Comet"
 APPEARANCE_LIGHT: Final = "light"
 APPEARANCE_DARK: Final = "dark"
 DEFAULT_APPEARANCE_MODE: Final = APPEARANCE_LIGHT
-CUSTOM_THEME_NAME: Final = "Пользовательская"
+CUSTOM_THEME_NAME: Final = "custom"
 BUILTIN_THEME_NAMES: Final = ("Comet", "Aurora", "Warm")
 THEME_NAMES: Final = (*BUILTIN_THEME_NAMES, CUSTOM_THEME_NAME)
 APPEARANCE_MODES: Final = (APPEARANCE_LIGHT, APPEARANCE_DARK)
-APPEARANCE_LABELS: Final = {
-    APPEARANCE_LIGHT: "Светлая",
-    APPEARANCE_DARK: "Тёмная",
+THEME_LABEL_KEYS: Final = {
+    "Comet": "theme.name.comet",
+    "Aurora": "theme.name.aurora",
+    "Warm": "theme.name.warm",
+    CUSTOM_THEME_NAME: "theme.name.custom",
+}
+APPEARANCE_LABEL_KEYS: Final = {
+    APPEARANCE_LIGHT: "theme.appearance.light",
+    APPEARANCE_DARK: "theme.appearance.dark",
 }
 
 
@@ -219,19 +225,19 @@ def contrast_ratio(first: str, second: str) -> float:
 
 def palette_contrast_warnings(palette: ThemePalette) -> list[str]:
     pairs = (
-        ("Основной текст / карточка", palette.text_primary, palette.card_background),
-        ("Вторичный текст / карточка", palette.text_secondary, palette.card_background),
-        ("Текст кнопок / кнопка", palette.button_text, palette.button_background),
-        ("Текст акцента / акцент", palette.on_accent, palette.accent),
-        ("Работа / карточка", palette.work, palette.card_background),
-        ("Короткий отдых / карточка", palette.short_break, palette.card_background),
-        ("Длинный отдых / карточка", palette.long_break, palette.card_background),
-        ("Переработка / карточка", palette.overwork, palette.card_background),
-        ("Короткий отдых сверх нормы / карточка", palette.short_break_overrun, palette.card_background),
-        ("Длинный отдых сверх нормы / карточка", palette.long_break_overrun, palette.card_background),
+        ("theme.contrast.primary_card", palette.text_primary, palette.card_background),
+        ("theme.contrast.secondary_card", palette.text_secondary, palette.card_background),
+        ("theme.contrast.button", palette.button_text, palette.button_background),
+        ("theme.contrast.accent", palette.on_accent, palette.accent),
+        ("theme.contrast.work", palette.work, palette.card_background),
+        ("theme.contrast.short_break", palette.short_break, palette.card_background),
+        ("theme.contrast.long_break", palette.long_break, palette.card_background),
+        ("theme.contrast.overwork", palette.overwork, palette.card_background),
+        ("theme.contrast.short_break_overrun", palette.short_break_overrun, palette.card_background),
+        ("theme.contrast.long_break_overrun", palette.long_break_overrun, palette.card_background),
     )
     return [
-        f"{label}: {contrast_ratio(foreground, background):.2f}:1"
+        f"{label}|{contrast_ratio(foreground, background):.2f}:1"
         for label, foreground, background in pairs
         if contrast_ratio(foreground, background) < 4.5
     ]
@@ -270,6 +276,8 @@ class CustomThemeDraft:
 
 def normalize_theme_name(value: object) -> str:
     candidate = str(value or "").strip().casefold()
+    if candidate == "пользовательская":
+        return CUSTOM_THEME_NAME
     for name in THEME_NAMES:
         if candidate == name.casefold():
             return name

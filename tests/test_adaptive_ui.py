@@ -64,7 +64,7 @@ class AdaptiveUiTests(unittest.TestCase):
             self.assertIn(palette.card_background, window.tray.menu.styleSheet())
             self.assertIn(palette.text_primary, window.tray.menu.styleSheet())
             self.assertEqual(
-                set(window.tray.actions),
+                {action.text() for action in window.tray.actions.values()},
                 {"Показать окно", "Скрыть окно", "Старт / Пауза", "Сброс", "Выход"},
             )
 

@@ -139,7 +139,7 @@ class TimerEngine:
         self._update_durations()
 
     def mode_name(self) -> str:
-        """Возвращает название текущего режима для показа в интерфейсе."""
+        """Сохраняет прежний русский публичный контракт; UI использует timer_mode_text."""
         if self.state.waiting_for_continue:
             if self.state.overrun_mode == TimerMode.WORK:
                 return "Переработка"
@@ -147,7 +147,11 @@ class TimerEngine:
                 return "Короткий отдых сверх нормы"
             if self.state.overrun_mode == TimerMode.LONG_BREAK:
                 return "Длинный отдых сверх нормы"
-        return self.state.mode.value
+        return {
+            TimerMode.WORK: "Работа",
+            TimerMode.SHORT_BREAK: "Короткий отдых",
+            TimerMode.LONG_BREAK: "Длинный отдых",
+        }[self.state.mode]
 
     def current_period_duration_seconds(self) -> int:
         """Возвращает полную длительность текущего периода в секундах."""

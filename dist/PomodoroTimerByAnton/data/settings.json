@@ -3,20 +3,20 @@
   "work_minutes": 25,
   "short_break_minutes": 5,
   "long_break_minutes": 15,
-  "notifications_enabled": true,
+  "notifications_enabled": false,
   "notification_sound_enabled": true,
   "work_end_message": "Рабочий период завершен. Время отдохнуть.",
   "short_break_end_message": "Короткий отдых завершен. Пора вернуться к работе.",
   "long_break_end_message": "Длинный отдых завершен. Пора начать новый рабочий период.",
-  "autostart_enabled": false,
+  "autostart_enabled": true,
   "use_long_break": true,
   "long_break_interval": 4,
-  "auto_start_next_period": true,
+  "auto_start_next_period": false,
   "time_display_format": "HH:MM:SS",
-  "minimize_to_tray_on_start": false,
+  "minimize_to_tray_on_start": true,
   "close_to_tray": true,
   "theme_name": "Comet",
-  "appearance_mode": "light",
+  "appearance_mode": "dark",
   "custom_theme": {
     "light": {
       "background": "#F3F6F5",
@@ -29,7 +29,7 @@
       "button_background": "#E5ECEA",
       "button_text": "#17201E",
       "border": "#CBD7D3",
-      "disabled": "#84928E",
+      "disabled": "#66736F",
       "focus": "#087E75",
       "success": "#27754C",
       "warning": "#805400",
@@ -53,7 +53,7 @@
       "button_background": "#22302D",
       "button_text": "#F2F7F5",
       "border": "#344541",
-      "disabled": "#70817D",
+      "disabled": "#84938F",
       "focus": "#70D7CA",
       "success": "#6FD39A",
       "warning": "#F0BD66",
@@ -68,22 +68,22 @@
     }
   },
   "overrun_visual": {
-    "effect": "Пульсация",
+    "effect": "Сигнальные маячки",
     "color_enabled": true,
     "scope": "Цифры и карточка",
     "speed": "Обычно",
-    "intensity": "Средне",
+    "intensity": "Слабо",
     "animations_enabled": true,
-    "opaque_widget_during_overrun": false,
+    "opaque_widget_during_overrun": true,
     "colors": {
       "overwork": null,
       "short_break_overrun": null,
       "long_break_overrun": null
     }
   },
-  "widget_enabled": false,
-  "widget_type": "Компактный",
-  "widget_size": "Маленький",
+  "widget_enabled": true,
+  "widget_type": "Расширенный",
+  "widget_size": "Пользовательский",
   "widget_layouts": {
     "Минималистичный": {
       "size": "Маленький",
@@ -100,11 +100,11 @@
       "y": 100
     },
     "Расширенный": {
-      "size": "Маленький",
-      "width": 340,
-      "height": 215,
-      "x": 100,
-      "y": 100
+      "size": "Пользовательский",
+      "width": 405,
+      "height": 294,
+      "x": 1519,
+      "y": 4
     },
     "Микро": {
       "size": "Маленький",
@@ -137,8 +137,14 @@
   },
   "widget_background_color": "#202124",
   "widget_text_color": "#ffffff",
-  "widget_opacity": 100,
+  "widget_opacity": 43,
   "widget_always_on_top": true,
-  "widget_x": 100,
-  "widget_y": 100
+  "widget_x": 1519,
+  "widget_y": 4,
+  "main_window_geometry": {
+    "x": 14,
+    "y": 346,
+    "width": 1440,
+    "height": 737
+  }
 }

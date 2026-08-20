@@ -51,9 +51,9 @@ def default_profile() -> TimerProfile:
         time_display_format=DEFAULT_TIME_DISPLAY_FORMAT,
         notifications_enabled=True,
         notification_sound_enabled=True,
-        work_end_message="Рабочий период завершен. Время отдохнуть.",
-        short_break_end_message="Короткий отдых завершен. Пора вернуться к работе.",
-        long_break_end_message="Длинный отдых завершен. Пора начать новый рабочий период.",
+        work_end_message="notification.default.work_end",
+        short_break_end_message="notification.default.short_break_end",
+        long_break_end_message="notification.default.long_break_end",
         autostart_enabled=False,
         minimize_to_tray_on_start=DEFAULT_MINIMIZE_TO_TRAY_ON_START,
         close_to_tray=True,
@@ -207,6 +207,8 @@ class ProfilesService:
             return None
 
         name = str(data.get("name", "")).strip()
+        if name == "Стандартный":
+            name = DEFAULT_PROFILE_NAME
         if not name:
             return None
 
@@ -267,13 +269,19 @@ class ProfilesService:
         normalized["widget_opacity"] = normalize_widget_opacity(
             normalized.get("widget_opacity"),
         )
-        for key, default_value in (
-            ("work_end_message", "Рабочий период завершен. Время отдохнуть."),
-            ("short_break_end_message", "Короткий отдых завершен. Пора вернуться к работе."),
-            ("long_break_end_message", "Длинный отдых завершен. Пора начать новый рабочий период."),
-        ):
+        default_messages = {
+            "work_end_message": "notification.default.work_end",
+            "short_break_end_message": "notification.default.short_break_end",
+            "long_break_end_message": "notification.default.long_break_end",
+        }
+        legacy_messages = {
+            "Рабочий период завершен. Время отдохнуть.": default_messages["work_end_message"],
+            "Короткий отдых завершен. Пора вернуться к работе.": default_messages["short_break_end_message"],
+            "Длинный отдых завершен. Пора начать новый рабочий период.": default_messages["long_break_end_message"],
+        }
+        for key, default_value in default_messages.items():
             message = str(normalized.get(key, "")).strip()
-            normalized[key] = message or default_value
+            normalized[key] = legacy_messages.get(message, message or default_value)
         active_layout = normalized["widget_layouts"][normalized["widget_type"]]
         normalized["widget_x"] = int(active_layout["x"])
         normalized["widget_y"] = int(active_layout["y"])
@@ -293,7 +301,9 @@ class ProfilesService:
     def _ensure_default_profile(self) -> None:
         """Гарантирует, что стандартный профиль всегда есть в списке."""
         self.profiles = [
-            profile for profile in self.profiles if profile.name != DEFAULT_PROFILE_NAME
+            profile
+            for profile in self.profiles
+            if profile.name not in {DEFAULT_PROFILE_NAME, "Стандартный"}
         ]
         self.profiles.insert(0, default_profile())
 

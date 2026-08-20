@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from app.models import AppSettings, TimerMode, TimeDisplayFormat
+from app.i18n import localization_manager, timer_mode_text, tr, trn
 from app.overrun_effects import INACTIVE_FRAME, OverrunVisualFrame
 from app.theme import ThemeManager, ThemePalette, mode_color
 from app.timer_engine import TimerEngine
@@ -56,20 +57,28 @@ class WidgetDisplayState:
     primary_text: str
 
 
-PRIMARY_ACTION_TEXTS = ("Старт", "Пауза", "Продолжить")
+PRIMARY_ACTION_KEYS = ("action.start", "action.pause", "action.continue")
+
+
+def primary_action_texts() -> tuple[str, ...]:
+    return tuple(tr(key) for key in PRIMARY_ACTION_KEYS)
 
 
 def widget_display_state(timer: TimerEngine) -> WidgetDisplayState:
     if timer.state.waiting_for_continue:
-        primary_text = "Продолжить"
+        primary_text = tr("action.continue")
     elif timer.state.is_running:
-        primary_text = "Пауза"
+        primary_text = tr("action.pause")
     elif timer.state.remaining_seconds < timer.current_period_duration_seconds():
-        primary_text = "Продолжить"
+        primary_text = tr("action.continue")
     else:
-        primary_text = "Старт"
+        primary_text = tr("action.start")
     return WidgetDisplayState(
-        timer.mode_name(), timer.formatted_time(), timer.state.completed_work_periods,
+        timer_mode_text(
+            timer.state.overrun_mode or timer.state.mode,
+            timer.state.waiting_for_continue,
+        ),
+        timer.formatted_time(), timer.state.completed_work_periods,
         timer.state.waiting_for_continue, primary_text,
     )
 
@@ -96,6 +105,7 @@ class WidgetView(QWidget):
         self._animations_enabled = lambda: bool(
             self.timer.settings.overrun_visual.get("animations_enabled", True)
         )
+        localization_manager().language_changed.connect(self._retranslate_ui)
 
     def update_view(self) -> None:
         display = widget_display_state(self.timer)
@@ -132,11 +142,17 @@ class WidgetView(QWidget):
             self,
             variant="primary",
             theme_manager=self.theme_manager,
-            reserved_texts=PRIMARY_ACTION_TEXTS,
+            reserved_texts=primary_action_texts(),
             animations_enabled=self._animations_enabled,
         )
         button.clicked.connect(self._handle_primary)
         return button
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        if self.primary_button is not None:
+            self.primary_button.set_reserved_texts(primary_action_texts())
+        self.update_view()
+        self.updateGeometry()
 
     def apply_style(self, _palette: ThemePalette, parameters: WidgetSizeParameters) -> None:
         self.timer_visual.set_base_font_size(parameters.time_font, parameters.mode_font)
@@ -161,7 +177,7 @@ class MinimalWidgetView(WidgetView):
         layout.setContentsMargins(4, 4, 4, 4)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=28, mode_font_size=10)
         layout.addWidget(self.timer_visual, 1)
-        self.primary_button = self._make_primary_button("Продолжить")
+        self.primary_button = self._make_primary_button(tr("action.continue"))
         layout.addWidget(self.primary_button)
 
     def _primary_visible(self, display: WidgetDisplayState) -> bool:
@@ -175,7 +191,7 @@ class CompactWidgetView(WidgetView):
         layout.setContentsMargins(4, 4, 4, 4)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=28, mode_font_size=10)
         layout.addWidget(self.timer_visual, 1)
-        self.primary_button = self._make_primary_button("Старт")
+        self.primary_button = self._make_primary_button(tr("action.start"))
         layout.addWidget(self.primary_button)
 
 
@@ -187,7 +203,7 @@ class ExpandedWidgetView(WidgetView):
         layout.setSpacing(TOKENS.spacing.xs)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=34, mode_font_size=11)
         layout.addWidget(self.timer_visual, 1)
-        self.cycle_label = QLabel("Завершено рабочих периодов: 0", self)
+        self.cycle_label = QLabel(trn("widget.completed_work_periods", 0), self)
         self.cycle_label.setProperty("role", "caption")
         self.cycle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.cycle_label)
@@ -198,23 +214,23 @@ class ExpandedWidgetView(WidgetView):
             horizontal_spacing=TOKENS.spacing.xs,
             vertical_spacing=TOKENS.spacing.xs,
         )
-        self.primary_button = self._make_primary_button("Старт")
+        self.primary_button = self._make_primary_button(tr("action.start"))
         self.skip_button = AppButton(
-            "Пропустить", self.action_panel, variant="ghost", theme_manager=theme_manager,
+            tr("action.skip"), self.action_panel, variant="ghost", theme_manager=theme_manager,
             animations_enabled=self._animations_enabled,
         )
         self.skip_button.clicked.connect(actions.skip_period)
         self.reset_button = AppButton(
-            "Сбросить", self.action_panel, variant="ghost", theme_manager=theme_manager,
+            tr("action.reset"), self.action_panel, variant="ghost", theme_manager=theme_manager,
             animations_enabled=self._animations_enabled,
         )
         self.reset_button.clicked.connect(actions.reset_timer)
         self.open_button = AppButton(
-            "Открыть", self.action_panel, variant="ghost", icon_name="window",
+            tr("action.open"), self.action_panel, variant="ghost", icon_name="window",
             theme_manager=theme_manager, animations_enabled=self._animations_enabled,
         )
-        self.open_button.setAccessibleName("Открыть главное окно")
-        self.open_button.setToolTip("Открыть главное окно")
+        self.open_button.setAccessibleName(tr("action.open_main_window"))
+        self.open_button.setToolTip(tr("action.open_main_window"))
         self.open_button.clicked.connect(actions.show_main_window)
         for button in (self.primary_button, self.skip_button, self.reset_button, self.open_button):
             self.action_layout.addWidget(button)
@@ -222,7 +238,9 @@ class ExpandedWidgetView(WidgetView):
         self._open_button_compact: bool | None = None
 
     def _after_update(self, display: WidgetDisplayState) -> None:
-        self.cycle_label.setText(f"Завершено рабочих периодов: {display.completed_work_periods}")
+        self.cycle_label.setText(
+            trn("widget.completed_work_periods", display.completed_work_periods)
+        )
         self.skip_button.setEnabled(not display.waiting_for_continue)
         self.reset_button.setEnabled(not display.waiting_for_continue)
         self._update_action_layout()
@@ -252,19 +270,28 @@ class ExpandedWidgetView(WidgetView):
             self.primary_button.sizeHint().width()
             + self.skip_button.sizeHint().width()
             + self.reset_button.sizeHint().width()
-            + self.open_button.width_for_text("Открыть")
+            + self.open_button.width_for_text(tr("action.open"))
             + TOKENS.spacing.xs * 3
         )
         compact = available_width < full_row_width
         if compact != self._open_button_compact:
             self._open_button_compact = compact
-            self.open_button.setText("" if compact else "Открыть")
+            self.open_button.setText("" if compact else tr("action.open"))
             self.open_button.updateGeometry()
         required_height = self.action_layout.heightForWidth(available_width)
         if self.action_panel.minimumHeight() != required_height:
             self.action_panel.setMinimumHeight(required_height)
         self.action_layout.invalidate()
         self.action_panel.updateGeometry()
+
+    def _retranslate_ui(self, language_code: str) -> None:
+        self.skip_button.setText(tr("action.skip"))
+        self.reset_button.setText(tr("action.reset"))
+        self.open_button.setAccessibleName(tr("action.open_main_window"))
+        self.open_button.setToolTip(tr("action.open_main_window"))
+        self._open_button_compact = None
+        super()._retranslate_ui(language_code)
+        self._update_action_layout()
 
 
 class MicroWidgetView(WidgetView):
@@ -275,7 +302,7 @@ class MicroWidgetView(WidgetView):
         layout.setSpacing(2)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=25, mode_font_size=9, show_mode=False)
         layout.addWidget(self.timer_visual, 1)
-        self.primary_button = self._make_primary_button("Продолжить")
+        self.primary_button = self._make_primary_button(tr("action.continue"))
         layout.addWidget(self.primary_button)
 
     def _after_update(self, display: WidgetDisplayState) -> None:
@@ -290,13 +317,13 @@ class RowWidgetView(WidgetView):
         super().__init__(parent, timer, actions, theme_manager)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        self.mode_label = QLabel("Работа", self)
+        self.mode_label = QLabel(timer_mode_text(TimerMode.WORK), self)
         self.mode_label.setProperty("role", "mode")
         self.mode_label.setWordWrap(True)
         layout.addWidget(self.mode_label, 1)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=26, mode_font_size=9, show_mode=False)
         layout.addWidget(self.timer_visual, 2)
-        self.primary_button = self._make_primary_button("Старт")
+        self.primary_button = self._make_primary_button(tr("action.start"))
         layout.addWidget(self.primary_button, 1)
         theme_manager.register(self._apply_row_theme)
 
@@ -364,7 +391,7 @@ class RingWidgetView(WidgetView):
         self.ring = RingDisplay(timer, theme_manager, self)
         self.timer_visual = self.ring.visual
         layout.addWidget(self.ring, 1)
-        self.primary_button = self._make_primary_button("Старт")
+        self.primary_button = self._make_primary_button(tr("action.start"))
         layout.addWidget(self.primary_button)
 
     def _after_update(self, _display: WidgetDisplayState) -> None:
@@ -383,7 +410,7 @@ class ScoreboardWidgetView(WidgetView):
         layout.setContentsMargins(4, 4, 4, 4)
         self.timer_visual = TimerVisual(theme_manager, self, base_font_size=38, mode_font_size=10, mono=True)
         layout.addWidget(self.timer_visual, 1)
-        self.primary_button = self._make_primary_button("Старт")
+        self.primary_button = self._make_primary_button(tr("action.start"))
         layout.addWidget(self.primary_button)
 
 
@@ -437,7 +464,7 @@ class WidgetWindow:
         theme_manager: ThemeManager | None = None,
     ) -> None:
         if theme_manager is None:
-            raise ValueError("WidgetWindow требует общий ThemeManager")
+            raise ValueError("WidgetWindow requires the shared ThemeManager")
         self.parent = parent
         self.timer = timer
         self.settings = settings
@@ -455,6 +482,7 @@ class WidgetWindow:
         self._geometry_debouncer: Debouncer | None = None
         self._topmost: bool | None = None
         theme_manager.register(self.apply_theme)
+        localization_manager().language_changed.connect(self._retranslate_ui)
 
     def apply_settings(self, settings: AppSettings) -> None:
         previous_type = self._active_view_type
@@ -572,11 +600,17 @@ class WidgetWindow:
         if self.window is not None:
             return
         self.window = WidgetShell(self.parent)
-        self.window.setWindowTitle("Виджет Pomodoro")
+        self.window.setWindowTitle(tr("widget.window_title"))
         self.window.setWindowIcon(application_icon())
         self.window.closeRequested.connect(lambda: self._on_visibility_requested(False))
         self.window.geometryChanged.connect(self._on_geometry_changed)
         self._geometry_debouncer = Debouncer(self.window, self.SAVE_DELAY_MS, self._persist_current_layout)
+
+    def _retranslate_ui(self, _language_code: str) -> None:
+        if self.window is not None:
+            self.window.setWindowTitle(tr("widget.window_title"))
+        if self.view is not None:
+            self.view.update_view()
 
     def _rebuild_view(self, widget_type: str) -> None:
         if self.window is None:

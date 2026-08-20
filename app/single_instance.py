@@ -18,6 +18,9 @@ MESSAGE_BOX_ICON_INFORMATION: Final = 0x00000040
 MESSAGE_BOX_ICON_ERROR: Final = 0x00000010
 MESSAGE_BOX_SET_FOREGROUND: Final = 0x00010000
 
+ALREADY_RUNNING_KEY: Final = "startup.already_running"
+# Kept as a compatibility-only public constant for integrations released before
+# startup messages became locale-aware. The entry point itself uses the key.
 ALREADY_RUNNING_MESSAGE: Final = (
     "Pomodoro Timer уже запускается или уже запущен. "
     "Дождитесь открытия окна либо используйте уже открытое приложение."
@@ -26,6 +29,11 @@ ALREADY_RUNNING_MESSAGE: Final = (
 
 class SingleInstanceError(RuntimeError):
     """Системную блокировку не удалось создать или освободить."""
+
+    def __init__(self, key: str, **parameters: object) -> None:
+        super().__init__(key)
+        self.key = key
+        self.parameters = parameters
 
 
 def default_mutex_name() -> str:
@@ -59,7 +67,7 @@ class SingleInstanceLock:
             return True
         if os.name != "nt":
             raise SingleInstanceError(
-                "Системная блокировка одного экземпляра поддерживается только в Windows.",
+                "startup.lock.unsupported",
             )
 
         kernel32 = _kernel32()
@@ -68,7 +76,8 @@ class SingleInstanceLock:
         if not handle:
             error_code = ctypes.get_last_error()
             raise SingleInstanceError(
-                f"Не удалось создать системную блокировку (WinError {error_code}).",
+                "startup.lock.create_failed",
+                error_code=error_code,
             )
 
         error_code = ctypes.get_last_error()
@@ -76,8 +85,8 @@ class SingleInstanceLock:
             if not kernel32.CloseHandle(handle):
                 close_error = ctypes.get_last_error()
                 raise SingleInstanceError(
-                    "Другой экземпляр уже запущен, но не удалось закрыть "
-                    f"вторичный handle (WinError {close_error}).",
+                    "startup.lock.secondary_close_failed",
+                    error_code=close_error,
                 )
             return False
 
@@ -93,13 +102,14 @@ class SingleInstanceLock:
         if not kernel32.CloseHandle(handle):
             error_code = ctypes.get_last_error()
             raise SingleInstanceError(
-                f"Не удалось освободить системную блокировку (WinError {error_code}).",
+                "startup.lock.release_failed",
+                error_code=error_code,
             )
         self._handle = None
 
     def __enter__(self) -> "SingleInstanceLock":
         if not self.acquire():
-            raise SingleInstanceError("Другой экземпляр приложения уже работает.")
+            raise SingleInstanceError("startup.lock.already_running")
         return self
 
     def __exit__(self, *_args: object) -> None:

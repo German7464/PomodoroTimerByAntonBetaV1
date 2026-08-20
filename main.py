@@ -4,11 +4,12 @@ from collections.abc import Callable
 from typing import Protocol
 
 from app.single_instance import (
-    ALREADY_RUNNING_MESSAGE,
+    ALREADY_RUNNING_KEY,
     SingleInstanceError,
     SingleInstanceLock,
     show_native_message,
 )
+from app.early_i18n import early_tr
 
 
 class RunnableWindow(Protocol):
@@ -28,11 +29,11 @@ def main(
     try:
         acquired = lock.acquire()
     except SingleInstanceError as error:
-        message_function(str(error), error=True)
+        message_function(early_tr(error.key, **error.parameters), error=True)
         return 1
 
     if not acquired:
-        message_function(ALREADY_RUNNING_MESSAGE)
+        message_function(early_tr(ALREADY_RUNNING_KEY))
         return 0
 
     try:
@@ -49,7 +50,7 @@ def main(
         try:
             lock.release()
         except SingleInstanceError as error:
-            message_function(str(error), error=True)
+            message_function(early_tr(error.key, **error.parameters), error=True)
 
 
 if __name__ == "__main__":

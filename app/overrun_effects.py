@@ -12,12 +12,12 @@ from app.models import TimerMode
 from app.theme import ThemePalette, is_hex_color, mode_color
 
 
-EFFECT_NONE: Final = "Без анимации"
-EFFECT_PULSE: Final = "Пульсация"
-EFFECT_SCALE: Final = "Увеличение цифр"
-EFFECT_BEACONS: Final = "Сигнальные маячки"
-EFFECT_BORDER: Final = "Акцентная рамка"
-EFFECT_WAVE: Final = "Волна-индикатор"
+EFFECT_NONE: Final = "none"
+EFFECT_PULSE: Final = "pulse"
+EFFECT_SCALE: Final = "scale"
+EFFECT_BEACONS: Final = "beacons"
+EFFECT_BORDER: Final = "border"
+EFFECT_WAVE: Final = "wave"
 OVERRUN_EFFECTS: Final = (
     EFFECT_NONE,
     EFFECT_PULSE,
@@ -32,24 +32,56 @@ LEGACY_EFFECT_NONE: Final = "Без дополнительного эффект�
 EFFECT_COLOR: Final = "Изменение цвета"
 EFFECT_COLOR_PULSE: Final = "Цвет и пульсация"
 
-SCOPE_DIGITS: Final = "Только цифры таймера"
-SCOPE_CARD: Final = "Карточка таймера"
-SCOPE_BOTH: Final = "Цифры и карточка"
+SCOPE_DIGITS: Final = "digits"
+SCOPE_CARD: Final = "card"
+SCOPE_BOTH: Final = "both"
 OVERRUN_SCOPES: Final = (SCOPE_DIGITS, SCOPE_CARD, SCOPE_BOTH)
 
-SPEED_SLOW: Final = "Медленно"
-SPEED_NORMAL: Final = "Обычно"
-SPEED_FAST: Final = "Быстро"
+SPEED_SLOW: Final = "slow"
+SPEED_NORMAL: Final = "normal"
+SPEED_FAST: Final = "fast"
 OVERRUN_SPEEDS: Final = (SPEED_SLOW, SPEED_NORMAL, SPEED_FAST)
 
-INTENSITY_WEAK: Final = "Слабо"
-INTENSITY_MEDIUM: Final = "Средне"
-INTENSITY_STRONG: Final = "Сильно"
+INTENSITY_WEAK: Final = "weak"
+INTENSITY_MEDIUM: Final = "medium"
+INTENSITY_STRONG: Final = "strong"
 OVERRUN_INTENSITIES: Final = (
     INTENSITY_WEAK,
     INTENSITY_MEDIUM,
     INTENSITY_STRONG,
 )
+
+EFFECT_LABEL_KEYS: Final = {value: f"overrun.effect.{value}" for value in OVERRUN_EFFECTS}
+SCOPE_LABEL_KEYS: Final = {value: f"overrun.scope.{value}" for value in OVERRUN_SCOPES}
+SPEED_LABEL_KEYS: Final = {value: f"overrun.speed.{value}" for value in OVERRUN_SPEEDS}
+INTENSITY_LABEL_KEYS: Final = {
+    value: f"overrun.intensity.{value}" for value in OVERRUN_INTENSITIES
+}
+
+# Exact localized identifiers persisted by older versions.
+_LEGACY_EFFECTS: Final = {
+    "Без анимации": EFFECT_NONE,
+    "Пульсация": EFFECT_PULSE,
+    "Увеличение цифр": EFFECT_SCALE,
+    "Сигнальные маячки": EFFECT_BEACONS,
+    "Акцентная рамка": EFFECT_BORDER,
+    "Волна-индикатор": EFFECT_WAVE,
+}
+_LEGACY_SCOPES: Final = {
+    "Только цифры таймера": SCOPE_DIGITS,
+    "Карточка таймера": SCOPE_CARD,
+    "Цифры и карточка": SCOPE_BOTH,
+}
+_LEGACY_SPEEDS: Final = {
+    "Медленно": SPEED_SLOW,
+    "Обычно": SPEED_NORMAL,
+    "Быстро": SPEED_FAST,
+}
+_LEGACY_INTENSITIES: Final = {
+    "Слабо": INTENSITY_WEAK,
+    "Средне": INTENSITY_MEDIUM,
+    "Сильно": INTENSITY_STRONG,
+}
 
 OVERWORK_KEY: Final = "overwork"
 SHORT_BREAK_OVERRUN_KEY: Final = "short_break_overrun"
@@ -118,8 +150,9 @@ def normalize_overrun_visual(value: object) -> dict[str, object]:
         EFFECT_COLOR: (EFFECT_NONE, True),
         EFFECT_COLOR_PULSE: (EFFECT_PULSE, True),
     }
-    if raw_effect in OVERRUN_EFFECTS:
-        normalized["effect"] = raw_effect
+    migrated_effect = _LEGACY_EFFECTS.get(raw_effect, raw_effect)
+    if migrated_effect in OVERRUN_EFFECTS:
+        normalized["effect"] = migrated_effect
         legacy_color_default = defaults["color_enabled"]
     elif raw_effect in legacy_effects:
         normalized["effect"], legacy_color_default = legacy_effects[raw_effect]
@@ -127,12 +160,13 @@ def normalize_overrun_visual(value: object) -> dict[str, object]:
         normalized["effect"] = defaults["effect"]
         legacy_color_default = defaults["color_enabled"]
 
-    for key, allowed in (
-        ("scope", OVERRUN_SCOPES),
-        ("speed", OVERRUN_SPEEDS),
-        ("intensity", OVERRUN_INTENSITIES),
+    for key, allowed, legacy in (
+        ("scope", OVERRUN_SCOPES, _LEGACY_SCOPES),
+        ("speed", OVERRUN_SPEEDS, _LEGACY_SPEEDS),
+        ("intensity", OVERRUN_INTENSITIES, _LEGACY_INTENSITIES),
     ):
-        candidate = raw.get(key)
+        raw_candidate = raw.get(key)
+        candidate = legacy.get(raw_candidate, raw_candidate)
         normalized[key] = candidate if candidate in allowed else defaults[key]
     for key, default in (
         ("color_enabled", legacy_color_default),

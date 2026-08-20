@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +22,12 @@ from PySide6.QtWidgets import (
 from app.autostart import AutostartService
 from app.config import APP_NAME, DATA_DIR_WARNING, SETTINGS_FILE, STATISTICS_FILE
 from app.models import AppSettings, TimerMode
+from app.i18n import (
+    initialize_localization,
+    normalize_language_code,
+    timer_mode_text,
+    tr,
+)
 from app.notifications import NotificationService
 from app.overrun_effects import OverrunVisualController, OverrunVisualFrame, normalize_overrun_visual
 from app.statistics import StatisticsService
@@ -69,6 +75,10 @@ class MainWindow(QMainWindow):
         self._geometry_ready = False
 
         self.settings = load_app_settings(SETTINGS_FILE)
+        self.localization = initialize_localization(
+            self.application,
+            self.settings.ui_language,
+        )
         self._sync_interface_motion_setting()
         self._settings_save = Debouncer(self, 500, self._save_settings_now)
         self._layout_resize = Debouncer(self, 80, self._apply_responsive_layout)
@@ -121,6 +131,7 @@ class MainWindow(QMainWindow):
         )
 
         self._build_ui()
+        self.localization.language_changed.connect(self._retranslate_ui)
         self._geometry_ready = True
         self._apply_responsive_layout()
         self.set_widget_visibility(self.settings.widget_enabled, persist=False)
@@ -131,7 +142,14 @@ class MainWindow(QMainWindow):
         )
         self._refresh_labels()
         if DATA_DIR_WARNING:
-            QTimer.singleShot(350, lambda: QMessageBox.warning(self, "Portable-режим", DATA_DIR_WARNING))
+            QTimer.singleShot(
+                350,
+                lambda: QMessageBox.warning(
+                    self,
+                    tr("error.data.portable_title"),
+                    tr(DATA_DIR_WARNING),
+                ),
+            )
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -150,7 +168,7 @@ class MainWindow(QMainWindow):
         self.brand_label = QLabel("Pomodoro", self.sidebar)
         self.brand_label.setProperty("role", "pageTitle")
         side.addWidget(self.brand_label)
-        self.brand_subtitle = QLabel("Спокойный ритм работы", self.sidebar)
+        self.brand_subtitle = QLabel(tr("main.brand_subtitle"), self.sidebar)
         self.brand_subtitle.setProperty("role", "caption")
         side.addWidget(self.brand_subtitle)
         side.addSpacing(TOKENS.spacing.xl)
@@ -159,14 +177,15 @@ class MainWindow(QMainWindow):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         nav_specs = (
-            ("Таймер", "timer"),
-            ("Статистика", "statistics"),
-            ("Настройки", "settings"),
-            ("Справка", "help"),
+            ("nav.timer", "timer"),
+            ("nav.statistics", "statistics"),
+            ("nav.settings", "settings"),
+            ("nav.help", "help"),
         )
+        self._nav_specs = nav_specs
         self.nav_buttons: list[AppButton] = []
-        for index, (text, icon) in enumerate(nav_specs):
-            button = AppButton(text, self.sidebar, variant="ghost", icon_name=icon, theme_manager=self.theme_manager)
+        for index, (key, icon) in enumerate(nav_specs):
+            button = AppButton(tr(key), self.sidebar, variant="ghost", icon_name=icon, theme_manager=self.theme_manager)
             button.setProperty("nav", True)
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, target=index: self.page_stack.setCurrentIndex(target))
@@ -195,6 +214,7 @@ class MainWindow(QMainWindow):
             on_widget_opacity_change=self.set_widget_opacity,
             on_overrun_opacity_change=self.set_overrun_widget_opacity,
             on_widget_configuration_change=self.set_widget_configuration,
+            on_language_change=self.set_interface_language,
             theme_manager=self.theme_manager,
         )
         self.page_stack.addWidget(self.settings_view)
@@ -210,9 +230,9 @@ class MainWindow(QMainWindow):
         self.timer_page_layout = outer
         outer.setContentsMargins(TOKENS.spacing.xxl, TOKENS.spacing.xl, TOKENS.spacing.xxl, TOKENS.spacing.xl)
         outer.setSpacing(TOKENS.spacing.lg)
-        header = PageHeader("Фокус-сессия", "Один таймер для главного окна, уведомления и виджета.", page)
+        header = PageHeader("timer.page.title", "timer.page.subtitle", page)
         self.appearance_mode_switch = SwitchRow(
-            "Тёмный режим",
+            "settings.appearance.dark_mode",
             self.settings.appearance_mode == APPEARANCE_DARK,
             page,
             theme_manager=self.theme_manager,
@@ -225,26 +245,26 @@ class MainWindow(QMainWindow):
         timer_card = Card(page, padding=TOKENS.spacing.lg, shadow=True, theme_manager=self.theme_manager)
         self.timer_visual = TimerVisual(self.theme_manager, timer_card, base_font_size=72, mode_font_size=17)
         timer_card.content_layout.addWidget(self.timer_visual, 1)
-        self.status_label = QLabel("Таймер остановлен", timer_card)
+        self.status_label = QLabel(tr("timer.status.stopped"), timer_card)
         self.status_label.setProperty("role", "statusChip")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setAccessibleName("Состояние таймера")
+        self.status_label.setAccessibleName(tr("timer.status.accessible_name"))
         timer_card.content_layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignCenter)
 
         controls = FlowLayout(horizontal_spacing=TOKENS.spacing.sm, vertical_spacing=TOKENS.spacing.sm)
-        self.start_button = AppButton("Старт", timer_card, variant="primary", icon_name="play", theme_manager=self.theme_manager)
+        self.start_button = AppButton(tr("action.start"), timer_card, variant="primary", icon_name="play", theme_manager=self.theme_manager)
         self.start_button.clicked.connect(self.start)
-        self.pause_button = AppButton("Пауза", timer_card, icon_name="pause", theme_manager=self.theme_manager)
+        self.pause_button = AppButton(tr("action.pause"), timer_card, icon_name="pause", theme_manager=self.theme_manager)
         self.pause_button.clicked.connect(self.toggle_pause)
-        self.skip_button = AppButton("Пропустить", timer_card, variant="ghost", icon_name="skip", theme_manager=self.theme_manager)
+        self.skip_button = AppButton(tr("action.skip"), timer_card, variant="ghost", icon_name="skip", theme_manager=self.theme_manager)
         self.skip_button.clicked.connect(self.skip_period)
-        self.reset_button = AppButton("Сбросить", timer_card, variant="ghost", icon_name="reset", theme_manager=self.theme_manager)
+        self.reset_button = AppButton(tr("action.reset"), timer_card, variant="ghost", icon_name="reset", theme_manager=self.theme_manager)
         self.reset_button.clicked.connect(self.reset)
         for button in (self.start_button, self.pause_button, self.skip_button, self.reset_button):
             controls.addWidget(button)
         timer_card.content_layout.addLayout(controls)
         self.continue_button = AppButton(
-            "Продолжить и начать следующий период",
+            tr("action.continue_next_period"),
             timer_card,
             variant="primary",
             icon_name="play",
@@ -256,10 +276,10 @@ class MainWindow(QMainWindow):
 
         widget_card = Card(page, padding=TOKENS.spacing.md)
         self.widget_visibility_switch = SwitchRow(
-            "Отображать виджет",
+            "timer.widget.show",
             self.settings.widget_enabled,
             widget_card,
-            description="Положение, размер, тип и прозрачность сохраняются отдельно.",
+            description="timer.widget.show.description",
             theme_manager=self.theme_manager,
             animations_enabled=lambda: bool(self.settings.overrun_visual.get("animations_enabled", True)),
         )
@@ -308,14 +328,20 @@ class MainWindow(QMainWindow):
             try:
                 self.autostart.set_enabled(settings.autostart_enabled)
             except RuntimeError as error:
-                QMessageBox.warning(self, "Автозапуск", str(error))
+                QMessageBox.warning(
+                    self,
+                    tr("settings.tray.autostart_title"),
+                    tr(str(error)),
+                )
                 settings.autostart_enabled = self.settings.autostart_enabled
         self._settings_save.cancel()
         settings.overrun_visual = normalize_overrun_visual(settings.overrun_visual)
         self.settings = settings
+        self.settings.ui_language = normalize_language_code(settings.ui_language)
         self._sync_interface_motion_setting()
         self.settings_view.settings = settings
         self.settings_view.update_autostart_status(self.autostart.status())
+        self.localization.set_language(self.settings.ui_language)
         self.apply_theme_selection(
             settings.theme_name,
             settings.appearance_mode,
@@ -387,7 +413,7 @@ class MainWindow(QMainWindow):
         if overrun is not None:
             self.statistics.record_overrun(overrun.mode, overrun.duration_seconds)
         self._tick_timer.stop()
-        self.notifications.dismiss()
+        self.notifications.dispose()
         self.overrun_visual_controller.stop()
         self._scheduler.stop_all()
         self.widget_window.close()
@@ -410,6 +436,18 @@ class MainWindow(QMainWindow):
             self.settings.theme_name,
             APPEARANCE_DARK if enabled else APPEARANCE_LIGHT,
         )
+
+    def set_interface_language(self, language_code: str) -> bool:
+        normalized = normalize_language_code(language_code)
+        changed = self.settings.ui_language != normalized
+        self.settings.ui_language = normalized
+        self.localization.set_language(normalized)
+        if hasattr(self, "settings_view"):
+            self.settings_view.settings.ui_language = normalized
+            self.settings_view.sync_language(normalized)
+        if changed:
+            save_app_settings(SETTINGS_FILE, self.settings)
+        return changed
 
     def apply_theme_selection(
         self,
@@ -526,7 +564,7 @@ class MainWindow(QMainWindow):
             self.brand_subtitle.setVisible(True)
             self.version_label.setVisible(True)
         self.sidebar.setFixedWidth(sidebar_width)
-        labels = ("Таймер", "Статистика", "Настройки", "Справка")
+        labels = tuple(tr(key) for key, _icon in self._nav_specs)
         for button, label in zip(self.nav_buttons, labels, strict=True):
             button.setText("" if collapsed else label)
             button.setToolTip(label if collapsed else "")
@@ -588,7 +626,7 @@ class MainWindow(QMainWindow):
         try:
             self.widget_window.apply_settings(self.settings)
             if self.widget_window.is_visible() != requested:
-                raise RuntimeError("окно не перешло в запрошенное состояние")
+                raise RuntimeError(tr("error.widget.state_mismatch"))
         except Exception as caught:
             error = caught
             if requested:
@@ -602,7 +640,14 @@ class MainWindow(QMainWindow):
                 error = error or save_error
         self._sync_widget_visibility()
         if error is not None:
-            QMessageBox.warning(self, "Виджет", f"Не удалось {'показать' if requested else 'скрыть'} виджет: {error}")
+            QMessageBox.warning(
+                self,
+                tr("settings.widget.dialog_title"),
+                tr(
+                    "error.widget.show" if requested else "error.widget.hide",
+                    error=error,
+                ),
+            )
             return False
         return True
 
@@ -652,9 +697,12 @@ class MainWindow(QMainWindow):
     def _refresh_labels(self) -> None:
         previewing = self.overrun_visual_controller.preview_active
         if not previewing:
-            status = "Период завершён — превышение считается до продолжения" if self.timer.state.waiting_for_continue else ""
+            status = tr("timer.overrun.waiting_status") if self.timer.state.waiting_for_continue else ""
             self.timer_visual.set_state(
-                self.timer.mode_name(),
+                timer_mode_text(
+                    self.timer.state.overrun_mode or self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
                 self.timer.formatted_time(),
                 self.timer.state.overrun_mode or self.timer.state.mode,
                 self.timer.state.waiting_for_continue,
@@ -665,13 +713,13 @@ class MainWindow(QMainWindow):
         self._sync_timer_buttons()
 
         if self.timer.state.waiting_for_continue:
-            status_text = "Превышение учитывается"
+            status_text = tr("timer.status.overrun")
         elif self.timer.state.is_running:
-            status_text = "Таймер запущен"
+            status_text = tr("timer.status.running")
         elif self.timer.state.remaining_seconds < self.timer.current_period_duration_seconds():
-            status_text = "Таймер на паузе"
+            status_text = tr("timer.status.paused")
         else:
-            status_text = "Таймер остановлен"
+            status_text = tr("timer.status.stopped")
         self.status_label.setText(status_text)
 
     def _sync_overrun_visual(self) -> None:
@@ -691,7 +739,10 @@ class MainWindow(QMainWindow):
         self.widget_window.apply_overrun_visual(frame)
         if not frame.active and not frame.preview:
             self.timer_visual.reset_preview_state(
-                self.timer.mode_name(),
+                timer_mode_text(
+                    self.timer.state.overrun_mode or self.timer.state.mode,
+                    self.timer.state.waiting_for_continue,
+                ),
                 self.timer.formatted_time(),
                 self.timer.state.overrun_mode or self.timer.state.mode,
                 self.timer.state.waiting_for_continue,
@@ -707,7 +758,28 @@ class MainWindow(QMainWindow):
             button.setEnabled(not waiting)
         self.start_button.setEnabled(not waiting and not running)
         self.pause_button.setEnabled(not waiting and (running or progressed))
-        self.pause_button.setText("Пауза" if running else "Продолжить")
+        self.pause_button.setText(tr("action.pause" if running else "action.continue"))
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.LanguageChange:
+            self.setProperty(
+                "languageChangeCount",
+                int(self.property("languageChangeCount") or 0) + 1,
+            )
+        super().changeEvent(event)
+
+    def _retranslate_ui(self, language_code: str) -> None:
+        self.setWindowTitle(APP_NAME)
+        self.brand_subtitle.setText(tr("main.brand_subtitle"))
+        self.status_label.setAccessibleName(tr("timer.status.accessible_name"))
+        self.start_button.setText(tr("action.start"))
+        self.skip_button.setText(tr("action.skip"))
+        self.reset_button.setText(tr("action.reset"))
+        self.continue_button.setText(tr("action.continue_next_period"))
+        self.settings_view.sync_language(language_code)
+        self._apply_responsive_layout()
+        self._refresh_labels()
+        self.updateGeometry()
 
     def _duration_settings_changed(self, new_settings: AppSettings) -> bool:
         return (

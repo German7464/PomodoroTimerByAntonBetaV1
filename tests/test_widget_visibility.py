@@ -10,7 +10,11 @@ from unittest.mock import patch
 from app.storage import load_app_settings, save_json
 from app.ui.settings_window import SettingsView
 from app.ui.tray import TrayController
-from app.widget_settings import WIDGET_SIZE_CUSTOM, WIDGET_TYPE_EXPANDED
+from app.widget_settings import (
+    WIDGET_SIZE_CUSTOM,
+    WIDGET_TYPE_COMPACT,
+    WIDGET_TYPE_EXPANDED,
+)
 from tests.qt_helpers import APP, isolated_main
 from tests.test_timer_engine import make_settings
 
@@ -84,17 +88,17 @@ class WidgetVisibilityTests(unittest.TestCase):
             save_json(path, {"widget_enabled": True, "widget_type": "Компактный", "widget_x": 321, "widget_y": 123})
             settings = load_app_settings(path)
             self.assertTrue(settings.widget_enabled)
-            self.assertEqual(settings.widget_layouts["Компактный"]["x"], 321)
-            self.assertEqual(settings.widget_layouts["Компактный"]["y"], 123)
+            self.assertEqual(settings.widget_layouts[WIDGET_TYPE_COMPACT]["x"], 321)
+            self.assertEqual(settings.widget_layouts[WIDGET_TYPE_COMPACT]["y"], 123)
 
     def test_settings_has_no_visibility_control_and_keeps_widget_options(self) -> None:
         source = inspect.getsource(SettingsView._build_widget_page)
         tray_source = inspect.getsource(TrayController)
         self.assertNotIn("widget_enabled", source)
-        self.assertNotIn("Показать / скрыть виджет", tray_source)
-        self.assertIn("Тип виджета", source)
-        self.assertIn('addRow("Размер"', source)
-        self.assertIn("Поверх всех окон", source)
+        self.assertNotIn("timer.widget.show", tray_source)
+        self.assertIn('"settings.widget.type"', source)
+        self.assertIn('"settings.widget.size"', source)
+        self.assertIn('"settings.widget.always_on_top"', source)
 
 
 if __name__ == "__main__":

@@ -93,6 +93,11 @@ def ensure_application(argv: Sequence[str] | None = None) -> QApplication:
     font = QFont(TOKENS.typography.family, TOKENS.typography.body)
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     application.setFont(font)
+    # Component tests and standalone dialogs receive the complete Russian fallback;
+    # MainWindow switches it to the saved language before constructing its UI.
+    from app.i18n import DEFAULT_LANGUAGE, initialize_localization
+
+    initialize_localization(application, DEFAULT_LANGUAGE)
     return application
 
 

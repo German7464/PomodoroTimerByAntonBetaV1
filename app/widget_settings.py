@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from typing import Any
 
 
-WIDGET_TYPE_MINIMAL = "Минималистичный"
-WIDGET_TYPE_COMPACT = "Компактный"
-WIDGET_TYPE_EXPANDED = "Расширенный"
-WIDGET_TYPE_MICRO = "Микро"
-WIDGET_TYPE_ROW = "Строка"
-WIDGET_TYPE_RING = "Кольцо"
-WIDGET_TYPE_SCOREBOARD = "Табло"
+WIDGET_TYPE_MINIMAL = "minimal"
+WIDGET_TYPE_COMPACT = "compact"
+WIDGET_TYPE_EXPANDED = "expanded"
+WIDGET_TYPE_MICRO = "micro"
+WIDGET_TYPE_ROW = "row"
+WIDGET_TYPE_RING = "ring"
+WIDGET_TYPE_SCOREBOARD = "scoreboard"
 WIDGET_TYPES = (
     WIDGET_TYPE_MINIMAL,
     WIDGET_TYPE_COMPACT,
@@ -23,25 +23,49 @@ WIDGET_TYPES = (
 )
 
 WIDGET_TYPE_DESCRIPTIONS = {
-    WIDGET_TYPE_MINIMAL: "Крупное время, название состояния и минимум деталей.",
-    WIDGET_TYPE_COMPACT: "Классическая компактная карточка с основной кнопкой.",
-    WIDGET_TYPE_EXPANDED: "Цикл и полный набор основных команд таймера.",
-    WIDGET_TYPE_MICRO: "Самое маленькое окно: обычно только время.",
-    WIDGET_TYPE_ROW: "Горизонтальная строка для края экрана.",
-    WIDGET_TYPE_RING: "Время внутри кольцевого индикатора периода.",
-    WIDGET_TYPE_SCOREBOARD: "Крупные моноширинные цифры в стиле спокойного табло.",
+    WIDGET_TYPE_MINIMAL: "widget.type.minimal.description",
+    WIDGET_TYPE_COMPACT: "widget.type.compact.description",
+    WIDGET_TYPE_EXPANDED: "widget.type.expanded.description",
+    WIDGET_TYPE_MICRO: "widget.type.micro.description",
+    WIDGET_TYPE_ROW: "widget.type.row.description",
+    WIDGET_TYPE_RING: "widget.type.ring.description",
+    WIDGET_TYPE_SCOREBOARD: "widget.type.scoreboard.description",
 }
 
-WIDGET_SIZE_SMALL = "Маленький"
-WIDGET_SIZE_MEDIUM = "Средний"
-WIDGET_SIZE_LARGE = "Большой"
-WIDGET_SIZE_CUSTOM = "Пользовательский"
+WIDGET_TYPE_LABEL_KEYS = {
+    widget_type: f"widget.type.{widget_type}" for widget_type in WIDGET_TYPES
+}
+
+WIDGET_SIZE_SMALL = "small"
+WIDGET_SIZE_MEDIUM = "medium"
+WIDGET_SIZE_LARGE = "large"
+WIDGET_SIZE_CUSTOM = "custom"
 WIDGET_SIZES = (
     WIDGET_SIZE_SMALL,
     WIDGET_SIZE_MEDIUM,
     WIDGET_SIZE_LARGE,
     WIDGET_SIZE_CUSTOM,
 )
+WIDGET_SIZE_LABEL_KEYS = {
+    widget_size: f"widget.size.{widget_size}" for widget_size in WIDGET_SIZES
+}
+
+# Exact values written by releases before stable identifiers were introduced.
+_LEGACY_WIDGET_TYPES = {
+    "Минималистичный": WIDGET_TYPE_MINIMAL,
+    "Компактный": WIDGET_TYPE_COMPACT,
+    "Расширенный": WIDGET_TYPE_EXPANDED,
+    "Микро": WIDGET_TYPE_MICRO,
+    "Строка": WIDGET_TYPE_ROW,
+    "Кольцо": WIDGET_TYPE_RING,
+    "Табло": WIDGET_TYPE_SCOREBOARD,
+}
+_LEGACY_WIDGET_SIZES = {
+    "Маленький": WIDGET_SIZE_SMALL,
+    "Средний": WIDGET_SIZE_MEDIUM,
+    "Большой": WIDGET_SIZE_LARGE,
+    "Пользовательский": WIDGET_SIZE_CUSTOM,
+}
 
 DEFAULT_WIDGET_TYPE = WIDGET_TYPE_COMPACT
 DEFAULT_WIDGET_SIZE = WIDGET_SIZE_SMALL
@@ -129,13 +153,13 @@ def effective_widget_alpha(
 def normalize_widget_type(value: Any) -> str:
     """Возвращает поддерживаемый тип или совместимый компактный вариант."""
     text = str(value or "").strip()
-    return text if text in WIDGET_TYPES else DEFAULT_WIDGET_TYPE
+    return text if text in WIDGET_TYPES else _LEGACY_WIDGET_TYPES.get(text, DEFAULT_WIDGET_TYPE)
 
 
 def normalize_widget_size(value: Any, default: str = DEFAULT_WIDGET_SIZE) -> str:
     """Возвращает поддерживаемый размер или безопасное значение по умолчанию."""
     text = str(value or "").strip()
-    return text if text in WIDGET_SIZES else default
+    return text if text in WIDGET_SIZES else _LEGACY_WIDGET_SIZES.get(text, default)
 
 
 def widget_size_parameters(
@@ -193,7 +217,11 @@ def normalize_widget_layouts(
     normalized_active_type = normalize_widget_type(active_type)
 
     for widget_type in WIDGET_TYPES:
-        raw_layout = raw_layouts.get(widget_type, {})
+        legacy_name = next(
+            (name for name, stable_id in _LEGACY_WIDGET_TYPES.items() if stable_id == widget_type),
+            None,
+        )
+        raw_layout = raw_layouts.get(widget_type, raw_layouts.get(legacy_name, {}))
         if not isinstance(raw_layout, dict):
             raw_layout = {}
 

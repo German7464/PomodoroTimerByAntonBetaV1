@@ -37,15 +37,11 @@ def get_data_dir() -> tuple[Path, str]:
         return portable_data_dir, warning
 
     # Если запись рядом с exe запрещена, не падаем: используем старую папку пользователя.
-    warning = (
-        "Не удалось записать данные рядом с программой. "
-        "Настройки временно будут храниться в папке пользователя. "
-        "Для portable-режима перенесите программу в папку, доступную для записи."
-    )
+    warning = "error.data.portable_fallback"
     if _ensure_writable_directory(USER_DATA_DIR):
         return USER_DATA_DIR, warning
 
-    raise RuntimeError("Не удалось создать папку для настроек приложения.")
+    raise RuntimeError("error.data.unavailable")
 
 
 def _ensure_writable_directory(path: Path) -> bool:
@@ -90,7 +86,7 @@ DEFAULT_WORK_MINUTES = 25
 DEFAULT_SHORT_BREAK_MINUTES = 5
 DEFAULT_LONG_BREAK_MINUTES = 15
 DEFAULT_CYCLES_BEFORE_LONG_BREAK = 4
-DEFAULT_PROFILE_NAME = "Стандартный"
+DEFAULT_PROFILE_NAME = "__default__"
 
 DEFAULT_USE_LONG_BREAK = True
 DEFAULT_AUTO_START_NEXT_PERIOD = True

@@ -30,7 +30,7 @@
         "button_background": "#E5ECEA",
         "button_text": "#17201E",
         "border": "#CBD7D3",
-        "disabled": "#84928E",
+        "disabled": "#66736F",
         "focus": "#087E75",
         "success": "#27754C",
         "warning": "#805400",
@@ -54,7 +54,7 @@
         "button_background": "#22302D",
         "button_text": "#F2F7F5",
         "border": "#344541",
-        "disabled": "#70817D",
+        "disabled": "#84938F",
         "focus": "#70D7CA",
         "success": "#6FD39A",
         "warning": "#F0BD66",
@@ -102,8 +102,8 @@
       },
       "Расширенный": {
         "size": "Маленький",
-        "width": 340,
-        "height": 215,
+        "width": 400,
+        "height": 245,
         "x": 100,
         "y": 100
       },

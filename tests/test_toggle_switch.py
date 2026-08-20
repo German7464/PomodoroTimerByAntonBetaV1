@@ -112,9 +112,9 @@ class ToggleSwitchContractTests(unittest.TestCase):
         main_source = inspect.getsource(MainWindow)
         self.assertNotIn("QCheckBox", settings_source)
         self.assertIn("SwitchRow", settings_source)
-        self.assertIn('"Отображать виджет"', main_source)
-        for command in ("Старт", "Пауза", "Продолжить", "Пропустить", "Сбросить"):
-            self.assertIn(command, main_source)
+        self.assertIn('"timer.widget.show"', main_source)
+        for command_key in ("action.start", "action.pause", "action.continue", "action.skip", "action.reset"):
+            self.assertIn(command_key, main_source)
         with isolated_main() as (window, _settings, _statistics):
             self.assertTrue(all(isinstance(row, SwitchRow) for row in window.settings_view.toggle_switches))
             self.assertIsInstance(window.start_button, AppButton)
